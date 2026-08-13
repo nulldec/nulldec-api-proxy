@@ -2,14 +2,19 @@
  * nulldec-api-proxy — el Worker de Cloudflare que ES api.nulldec.com.
  *
  * Todo el tráfico de la API pasa por aquí: aplica los límites de tasa del
- * borde a las rutas restringidas y reenvía el resto (reescribiendo solo
- * `hostname` y `protocol`) al proyecto de Supabase.
+ * borde a las rutas restringidas y reenvía el resto (reescribiendo
+ * `hostname`, `protocol` y, si aplica, el prefijo `/v1/`) al proyecto de
+ * Supabase.
  *
  * Esta fuente se reconstruyó el 2026-08-13 a partir del bundle desplegado
  * en Cloudflare (ver README.md de este repo para el porqué). La tarea 6
- * verificó la reconstrucción byte a byte contra el bundle real; esta tarea
- * (7) es la primera que le cambia lógica: el emparejador por sufijo
- * (`endsWith`) se sustituye por uno de método + patrón, ver más abajo.
+ * verificó la reconstrucción byte a byte contra el bundle real; la tarea 7
+ * cambió el emparejador de rutas restringidas (por sufijo → por método +
+ * patrón). Esta tarea (8) añade la reescritura `/v1/*` → `/functions/v1/*`:
+ * el Worker sigue sin conocer recursos ni verbos — es una única regla de
+ * prefijo, no un router — para que no pueda desincronizarse de un contrato
+ * que no conoce (spec §3). `/functions/v1/*` sigue funcionando exactamente
+ * igual que antes de esta tarea.
  */
 
 export interface Env {
@@ -103,6 +108,28 @@ export function matchRestrictedPath(method: string, pathname: string): LimiteRut
   );
 }
 
+/**
+ * Reescribe el prefijo `/v1/` a `/functions/v1/` antes de reenviar. Es toda
+ * la regla de enrutado que conoce el Worker: no sabe qué recursos ni verbos
+ * hay detrás de cada ruta, solo reconoce un prefijo. Es justo lo que impide
+ * que el Worker se desincronice de un contrato que no conoce (spec §3) — si
+ * esta función alguna vez necesita saber de un recurso concreto, es la señal
+ * de que esa lógica se está colando donde no debe.
+ *
+ * `/functions/v1/*` no se toca — sigue funcionando exactamente igual que
+ * antes de esta regla, ambos prefijos conviven.
+ *
+ * Solo se reescribe cuando `/v1/` es el propio prefijo del pathname
+ * (barra final incluida): `/v1` a secas (sin barra) no casa y pasa igual,
+ * y un `/v1/` que aparezca más adelante en la ruta — p.ej.
+ * `/functions/v1/algo/v1/otro` — tampoco, porque no es una sustitución
+ * global sobre el string, es una regla de prefijo.
+ */
+export function reescribirPrefijoV1(pathname: string): string {
+  if (!pathname.startsWith("/v1/")) return pathname;
+  return "/functions/v1/" + pathname.slice("/v1/".length);
+}
+
 async function checkAndIncrement(
   env: Env,
   key: string,
@@ -176,6 +203,15 @@ export default {
     const upstream = new URL(request.url);
     upstream.hostname = env.SUPABASE_HOST;
     upstream.protocol = "https:";
+    // Orden decidido a propósito: el límite de tasa de arriba ya evaluó
+    // `url.pathname` SIN reescribir, y da igual — `pathMatchesPattern`
+    // normaliza `/functions/v1/` y `/v1/` como la misma ruta antes de
+    // comparar (ver su comentario), así que este paso podría ir antes o
+    // después del límite sin cambiar el resultado. Se reescribe aquí, al
+    // construir la URL de destino, porque es donde ya se tocan `hostname`
+    // y `protocol` — una sola parada para las mutaciones de la URL
+    // saliente. `search` y `hash` no se tocan, así que sobreviven tal cual.
+    upstream.pathname = reescribirPrefijoV1(upstream.pathname);
     const proxied = new Request(upstream.toString(), request);
     return fetch(proxied);
   },
