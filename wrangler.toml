@@ -1,15 +1,79 @@
 name = "nulldec-api-proxy"
 main = "src/index.ts"
-compatibility_date = "2026-07-22"
 
-# ── LEE ESTO ANTES DE DESPLEGAR ──
-# Las variables y el dominio personalizado se configuraron a mano en el panel
-# de Cloudflare, no desde aquí: este repo nace en 2026-08-13, el Worker existe
-# desde 2026-07-22. Un `wrangler deploy` con un wrangler.toml incompleto puede
-# desvincular `api.nulldec.com` o dejar sin valor a SUPABASE_HOST /
-# SUPABASE_ANON_KEY, y eso tumba TODA la API, no una ruta.
+# ── DE DÓNDE SALEN ESTOS VALORES ──
+# Este repo nace el 2026-08-13; el Worker existe desde el 2026-07-22 y se
+# configuró a mano en el panel de Cloudflare. Todo lo que hay debajo se
+# CONFIRMÓ el 2026-08-13 contra la API de Cloudflare (no de memoria, no
+# deducido de la fuente) antes del primer despliegue desde este repo, porque
+# un wrangler.toml incompleto aquí no rompe una ruta: tumba TODA la API.
 #
-# Antes del primer despliegue desde este repo hay que confirmar en el panel:
-#   1. Qué variables de entorno tiene y con qué valores.
-#   2. Si `api.nulldec.com` está como Custom Domain o como Route.
-# Y declararlo aquí explícitamente. Hasta entonces, NO desplegar.
+# Lo confirmado, punto por punto:
+#   - compatibility_date desplegada: 2026-07-01 (NO 2026-07-22, que era lo que
+#     decía este fichero al nacer — esa es la fecha del primer despliegue, no
+#     la de compatibilidad). Ver la nota de abajo.
+#   - compatibility_flags: ninguna.
+#   - Bindings: SUPABASE_HOST (plain_text) y SUPABASE_ANON_KEY (secret_text).
+#   - api.nulldec.com: Custom Domain. La zona nulldec.com no tiene NI UNA
+#     Worker Route (`/zones/<id>/workers/routes` devuelve lista vacía), así
+#     que el dominio personalizado es el único disparador que hay.
+#   - Subdominio workers.dev: deshabilitado.
+
+# La fecha de compatibilidad se fija a la que YA está desplegada. Subirla
+# sería un cambio de runtime colado dentro de un despliegue cuyo objetivo es
+# otro (servir /v1/*), y este Worker está delante de toda la API: los cambios
+# de comportamiento se hacen de uno en uno y a propósito, no de propina.
+compatibility_date = "2026-07-01"
+compatibility_flags = []
+
+# Custom Domain, no Route. Declararlo aquí es idempotente (ya existe y apunta
+# a este mismo Worker), y evita que un despliegue futuro desde un clon limpio
+# de este repo se quede sin disparador.
+routes = [
+  { pattern = "api.nulldec.com", custom_domain = true }
+]
+
+# Está deshabilitado en el Worker desplegado y así se queda: la API se sirve
+# por api.nulldec.com. Se declara explícitamente para que un despliegue no
+# publique sin querer una segunda puerta de entrada, sin límites de tasa por
+# dominio y sin el certificado de la zona.
+workers_dev = false
+
+[vars]
+# Proyecto de Supabase al que se reenvía todo el tráfico. Es un binding de
+# texto plano en el Worker desplegado (no un secreto) y el host es público —
+# aparece en cualquier respuesta de la API.
+#
+# TIENE que estar declarado aquí: por omisión wrangler BORRA en cada
+# despliegue las variables de texto plano que no aparezcan en este fichero
+# (los secretos, en cambio, se conservan siempre). Sin esta línea,
+# SUPABASE_HOST quedaría vacío y el Worker reenviaría a "https://" — toda la
+# API caída.
+SUPABASE_HOST = "dtarsxovqdtjtdxzdzzy.supabase.co"
+
+# SUPABASE_ANON_KEY NO se declara aquí, y es deliberado: es un secreto
+# (secret_text). Wrangler conserva los secretos existentes en cada
+# despliegue, así que no hace falta repetirlo — y ponerlo en este fichero lo
+# metería en git, que es justo lo que un secreto no debe hacer. Se gestiona
+# con `npx wrangler secret put SUPABASE_ANON_KEY`.
+
+[secrets]
+# Declarar el secreto como REQUERIDO sin exponer su valor. Wrangler comprueba
+# antes de subir que existe en el Worker, y aborta si no.
+#
+# Cubre el único modo de fallo que quedaba vivo: desde un clon limpio de este
+# repo, o contra un Worker recién creado, un despliegue SIN el secreto tendría
+# éxito igualmente y el Worker autenticaría contra Supabase con `undefined`.
+# Eso no da un error de despliegue: da una API que responde 401 a todo, que es
+# la clase de fallo que cuesta horas de diagnosticar porque nada falló donde
+# se miraba. Con esta línea, deja de poder ocurrir en silencio.
+required = ["SUPABASE_ANON_KEY"]
+
+[observability]
+# Encendida en el Worker desplegado, y se declara para no apagarla sin
+# querer: es la única forma de ver los `console.error` de checkAndIncrement,
+# que es precisamente el fallo que NO se manifiesta como error visible
+# (falla en abierto: si rate_limit_check cae, el límite deja de aplicarse y
+# el tráfico sigue pasando como si nada).
+enabled = true
+head_sampling_rate = 1

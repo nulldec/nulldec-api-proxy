@@ -6,6 +6,8 @@
   "scripts": {
     "dev": "wrangler dev",
     "deploy": "wrangler deploy",
+    "upload": "wrangler versions upload",
+    "promote": "wrangler versions deploy",
     "test": "vitest run"
   },
   "devDependencies": {
