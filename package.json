@@ -1,0 +1,13 @@
+{
+  "name": "nulldec-api-proxy",
+  "version": "1.0.0",
+  "description": "Worker de Cloudflare que es api.nulldec.com: aplica los límites de tasa del borde y reenvía el resto del tráfico al proyecto de Supabase.",
+  "private": true,
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy"
+  },
+  "devDependencies": {
+    "wrangler": "^4.110.0"
+  }
+}

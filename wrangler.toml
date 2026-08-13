@@ -1,0 +1,15 @@
+name = "nulldec-api-proxy"
+main = "src/index.ts"
+compatibility_date = "2026-07-22"
+
+# ── LEE ESTO ANTES DE DESPLEGAR ──
+# Las variables y el dominio personalizado se configuraron a mano en el panel
+# de Cloudflare, no desde aquí: este repo nace en 2026-08-13, el Worker existe
+# desde 2026-07-22. Un `wrangler deploy` con un wrangler.toml incompleto puede
+# desvincular `api.nulldec.com` o dejar sin valor a SUPABASE_HOST /
+# SUPABASE_ANON_KEY, y eso tumba TODA la API, no una ruta.
+#
+# Antes del primer despliegue desde este repo hay que confirmar en el panel:
+#   1. Qué variables de entorno tiene y con qué valores.
+#   2. Si `api.nulldec.com` está como Custom Domain o como Route.
+# Y declararlo aquí explícitamente. Hasta entonces, NO desplegar.
