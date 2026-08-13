@@ -20,9 +20,11 @@ import worker, {
   DEFAULT_BUCKET,
   DEFAULT_LIMIT,
   DEFAULT_WINDOW_SECONDS,
+  RESTRICTED_PATHS,
   matchRestrictedPath,
   pathMatchesPattern,
   reescribirPrefijoV1,
+  tieneTechoPorDefecto,
   type Env,
 } from "./index";
 
@@ -47,9 +49,35 @@ describe("matchRestrictedPath", () => {
     expect(viaV1?.bucket).toBe("manage-siem-keys");
   });
 
-  it("el método discrimina: un GET no casa con una entrada declarada POST", () => {
-    expect(matchRestrictedPath("POST", "/v1/aws-tenant-deploy-decoy")).toBeDefined();
-    expect(matchRestrictedPath("GET", "/v1/aws-tenant-deploy-decoy")).toBeUndefined();
+  // El mecanismo de discriminación por método existe (lo pide el spec §6 y lo
+  // necesitará la fase 2), pero NINGUNA de las nueve entradas reales lo usa:
+  // todas declaran "*". Esta prueba verifica el mecanismo con una entrada de
+  // prueba propia, para no fijar como correcto lo contrario de lo que las
+  // entradas reales hacen. La prueba de abajo ("las nueve entradas reales
+  // casan con cualquier verbo") es la que cubre las entradas de verdad.
+  it("el mecanismo del método discrimina cuando una entrada declara un verbo concreto", () => {
+    const entradaDePrueba = { method: "POST", pattern: "/v1/prueba/:id" };
+    const casa = (m: string, p: string) =>
+      (entradaDePrueba.method === "*" || entradaDePrueba.method === m) &&
+      pathMatchesPattern(p, entradaDePrueba.pattern);
+
+    expect(casa("POST", "/v1/prueba/abc")).toBe(true);
+    expect(casa("GET", "/v1/prueba/abc")).toBe(false);
+  });
+
+  it("las nueve entradas reales casan con CUALQUIER verbo — no relajar lo desplegado", () => {
+    // Antes de la fase 1 el emparejador casaba por sufijo, sin mirar el
+    // método: un `GET /v1/contact-sales` entraba en el cubo de 5/hora igual
+    // que un POST. Estrechar una entrada a `method: "POST"` la deja fuera de
+    // su cubo estricto para el resto de verbos y la manda al techo por
+    // defecto (600/60 s) — una relajación silenciosa de un control vivo.
+    for (const entrada of RESTRICTED_PATHS) {
+      for (const metodo of ["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD"]) {
+        const m = matchRestrictedPath(metodo, entrada.pattern);
+        expect(m, `${metodo} ${entrada.pattern} debería casar su entrada estricta`).toBeDefined();
+        expect(m?.bucket).toBe(entrada.bucket);
+      }
+    }
   });
 
   it("las tres entradas muertas (cli, generate-api-key, list-interactive-credentials) ya no están", () => {
@@ -59,13 +87,89 @@ describe("matchRestrictedPath", () => {
   });
 });
 
+/**
+ * Instantánea de los nueve cubos.
+ *
+ * `bucket`, `limit` y `windowSeconds` no son detalles de implementación: son
+ * la clave (`rl:<bucket>:<ip>`) de contadores VIVOS en producción. Renombrar un
+ * cubo no da error en ningún sitio, simplemente empieza a contar desde cero
+ * para todo el mundo — es decir, desactiva el límite durante una ventana
+ * entera sin dejar rastro. Esta prueba existe para que ese cambio salga en
+ * rojo. Si de verdad se quiere renombrar o reajustar uno, se cambia aquí a
+ * propósito y se deja escrito el porqué.
+ */
+describe("instantánea de los cubos vivos", () => {
+  it("los nueve {bucket, limit, windowSeconds} son exactamente estos", () => {
+    const instantanea = RESTRICTED_PATHS.map(({ bucket, limit, windowSeconds }) => ({
+      bucket,
+      limit,
+      windowSeconds,
+    }));
+
+    expect(instantanea).toEqual([
+      { bucket: "aws-tenant-deploy", limit: 5, windowSeconds: 3600 },
+      { bucket: "azure-tenant-deploy", limit: 5, windowSeconds: 3600 },
+      { bucket: "gh-actions-issue", limit: 60, windowSeconds: 3600 },
+      { bucket: "list-net-ids", limit: 3, windowSeconds: 60 },
+      { bucket: "manage-siem-keys", limit: 10, windowSeconds: 3600 },
+      { bucket: "verify-turnstile", limit: 20, windowSeconds: 3600 },
+      { bucket: "contact-sales", limit: 5, windowSeconds: 3600 },
+      { bucket: "handle-network-signal", limit: 120, windowSeconds: 60 },
+      { bucket: "handle-interactive-signal", limit: 60, windowSeconds: 60 },
+    ]);
+  });
+
+  it("el cubo por defecto tampoco cambia de nombre ni de forma", () => {
+    expect(DEFAULT_BUCKET).toBe("default");
+    expect(DEFAULT_LIMIT).toBe(600);
+    expect(DEFAULT_WINDOW_SECONDS).toBe(60);
+  });
+});
+
+/**
+ * El techo por defecto alcanza la superficie de API y NADA más.
+ *
+ * Este Worker proxea el proyecto de Supabase entero: `/rest/v1` es PostgREST y
+ * `/auth/v1` es GoTrue, y ahí apuntan su cliente de supabase-js las dos
+ * consolas. Un techo universal metería un viaje extra y una escritura en
+ * Postgres delante de cada lectura de la consola.
+ */
+describe("tieneTechoPorDefecto", () => {
+  it("la superficie de API sí: /v1/ y /functions/v1/", () => {
+    expect(tieneTechoPorDefecto("/v1/verify-turnstile")).toBe(true);
+    expect(tieneTechoPorDefecto("/functions/v1/verify-turnstile")).toBe(true);
+  });
+
+  it("el resto de la superficie de Supabase no", () => {
+    expect(tieneTechoPorDefecto("/rest/v1/alerts?select=*")).toBe(false);
+    expect(tieneTechoPorDefecto("/auth/v1/token")).toBe(false);
+    expect(tieneTechoPorDefecto("/realtime/v1/websocket")).toBe(false);
+    expect(tieneTechoPorDefecto("/storage/v1/object/informes/x.pdf")).toBe(false);
+  });
+
+  it("'/v1' a secas, sin barra, no es la superficie de API", () => {
+    expect(tieneTechoPorDefecto("/v1")).toBe(false);
+  });
+});
+
 describe("techo por defecto para rutas no listadas", () => {
   const env: Env = { SUPABASE_HOST: "example.supabase.co", SUPABASE_ANON_KEY: "anon-key" };
   let fetchMock: ReturnType<typeof vi.fn>;
 
+  function urlDeEntrada(input: RequestInfo | URL): string {
+    if (typeof input === "string") return input;
+    if (input instanceof Request) return input.url;
+    return input.toString();
+  }
+
+  const llamadasAlLimite = () =>
+    fetchMock.mock.calls.filter(([input]) =>
+      urlDeEntrada(input).includes("/rest/v1/rpc/rate_limit_check"),
+    );
+
   beforeEach(() => {
     fetchMock = vi.fn(async (input: RequestInfo | URL) => {
-      const url = typeof input === "string" ? input : input.toString();
+      const url = urlDeEntrada(input);
       if (url.includes("/rest/v1/rpc/rate_limit_check")) {
         return new Response(JSON.stringify(true), { status: 200 });
       }
@@ -87,9 +191,7 @@ describe("techo por defecto para rutas no listadas", () => {
 
     await worker.fetch(request, env);
 
-    const rateLimitCall = fetchMock.mock.calls.find(([input]) =>
-      (typeof input === "string" ? input : input.toString()).includes("/rest/v1/rpc/rate_limit_check"),
-    );
+    const rateLimitCall = llamadasAlLimite()[0];
     expect(rateLimitCall).toBeDefined();
 
     const [, init] = rateLimitCall as [RequestInfo, RequestInit];
@@ -97,6 +199,143 @@ describe("techo por defecto para rutas no listadas", () => {
     expect(body.p_key).toBe(`rl:${DEFAULT_BUCKET}:203.0.113.9`);
     expect(body.p_limit).toBe(DEFAULT_LIMIT);
     expect(body.p_window_seconds).toBe(DEFAULT_WINDOW_SECONDS);
+  });
+
+  it("una lectura de PostgREST NO paga el límite: se reenvía sin llamar a la RPC", async () => {
+    const request = new Request("https://api.nulldec.com/rest/v1/alerts?select=*", {
+      method: "GET",
+      headers: { "cf-connecting-ip": "203.0.113.9" },
+    });
+
+    await worker.fetch(request, env);
+
+    expect(llamadasAlLimite()).toHaveLength(0);
+    // …y aun así se reenvía, que es el comportamiento previo a la fase 1.
+    const reenviada = fetchMock.mock.calls.find(([input]) =>
+      urlDeEntrada(input).includes("example.supabase.co/rest/v1/alerts"),
+    );
+    expect(reenviada).toBeDefined();
+  });
+
+  it("/auth/v1 tampoco paga el límite", async () => {
+    const request = new Request("https://api.nulldec.com/auth/v1/token?grant_type=password", {
+      method: "POST",
+      headers: { "cf-connecting-ip": "203.0.113.9" },
+    });
+
+    await worker.fetch(request, env);
+
+    expect(llamadasAlLimite()).toHaveLength(0);
+  });
+});
+
+/**
+ * El fallo EN ABIERTO de `checkAndIncrement`, y el 429.
+ *
+ * El fallo en abierto es deliberado y es la invariante que más tentación da de
+ * «arreglar» porque leída sola parece un bug: si la RPC falla, se deja pasar.
+ * La autenticación real de estas rutas es el secreto/JWT, no el límite, así que
+ * un hipo de Postgres no debe convertirse en un corte de tráfico legítimo.
+ * Sin estas pruebas, cambiarlo a `return false` no rompía nada en verde.
+ */
+describe("comportamiento de checkAndIncrement ante fallo y ante límite alcanzado", () => {
+  const env: Env = { SUPABASE_HOST: "example.supabase.co", SUPABASE_ANON_KEY: "anon-key" };
+
+  function urlDeEntrada(input: RequestInfo | URL): string {
+    if (typeof input === "string") return input;
+    if (input instanceof Request) return input.url;
+    return input.toString();
+  }
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  /** Silencia el console.error del camino de fallo para no ensuciar la salida. */
+  function callarError() {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+  }
+
+  it("si la RPC devuelve 500, la petición SE DEJA PASAR (falla en abierto), no se corta", async () => {
+    callarError();
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      if (urlDeEntrada(input).includes("/rest/v1/rpc/rate_limit_check")) {
+        return new Response("boom", { status: 500 });
+      }
+      return new Response("ok-upstream", { status: 200 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const res = await worker.fetch(
+      new Request("https://api.nulldec.com/v1/contact-sales", {
+        method: "POST",
+        headers: { "cf-connecting-ip": "203.0.113.9" },
+      }),
+      env,
+    );
+
+    expect(res.status).toBe(200);
+    expect(await res.text()).toBe("ok-upstream");
+    const reenviada = fetchMock.mock.calls.find(
+      ([input]) =>
+        urlDeEntrada(input).includes("example.supabase.co") &&
+        !urlDeEntrada(input).includes("rate_limit_check"),
+    );
+    expect(reenviada, "la petición debe llegar a upstream pese al fallo del límite").toBeDefined();
+  });
+
+  it("si la RPC lanza (fallo de red), la petición también se deja pasar", async () => {
+    callarError();
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      if (urlDeEntrada(input).includes("/rest/v1/rpc/rate_limit_check")) {
+        throw new TypeError("network error");
+      }
+      return new Response("ok-upstream", { status: 200 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const res = await worker.fetch(
+      new Request("https://api.nulldec.com/v1/contact-sales", {
+        method: "POST",
+        headers: { "cf-connecting-ip": "203.0.113.9" },
+      }),
+      env,
+    );
+
+    expect(res.status).toBe(200);
+    expect(await res.text()).toBe("ok-upstream");
+  });
+
+  it("si la RPC devuelve false, responde 429 con retry-after y la cabecera expuesta a CORS", async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      if (urlDeEntrada(input).includes("/rest/v1/rpc/rate_limit_check")) {
+        return new Response(JSON.stringify(false), { status: 200 });
+      }
+      return new Response("ok-upstream", { status: 200 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const res = await worker.fetch(
+      new Request("https://api.nulldec.com/v1/contact-sales", {
+        method: "POST",
+        headers: { "cf-connecting-ip": "203.0.113.9" },
+      }),
+      env,
+    );
+
+    expect(res.status).toBe(429);
+    // 3600 s: la ventana del cubo contact-sales, no la del techo por defecto.
+    expect(res.headers.get("retry-after")).toBe("3600");
+    expect(res.headers.get("access-control-expose-headers")).toBe("retry-after");
+    expect((await res.json()).error).toContain("límite");
+    // Y, cortada, NO se reenvía a upstream.
+    const reenviada = fetchMock.mock.calls.find(
+      ([input]) =>
+        urlDeEntrada(input).includes("example.supabase.co") &&
+        !urlDeEntrada(input).includes("rate_limit_check"),
+    );
+    expect(reenviada).toBeUndefined();
   });
 });
 

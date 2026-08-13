@@ -22,7 +22,17 @@ export interface Env {
   SUPABASE_ANON_KEY: string;
 }
 
-interface LimiteRuta {
+export interface LimiteRuta {
+  // Hoy TODAS las entradas declaran "*" a propósito. El campo existe porque el
+  // spec §6 lo pide y porque la fase 2 lo necesitará de verdad (distinguir un
+  // `GET /v1/decoys` de un `POST /v1/decoys` sobre el mismo patrón), pero
+  // estrechar una entrada a un método concreto RELAJA el control que hoy está
+  // vivo: el emparejador anterior a la fase 1 casaba por sufijo, sin mirar el
+  // método, así que cualquier verbo caía en el cubo estricto. Poner
+  // `method: "POST"` deja el resto de verbos fuera de ese cubo, y con el techo
+  // por defecto pasan de 5/hora a 600/minuto sin que nadie lo note. Estrechar
+  // cada entrada es una decisión de la fase 2, ruta a ruta y a propósito, no un
+  // efecto colateral de reescribir el emparejador.
   method: string | "*";
   pattern: string; // admite segmentos ":param", p.ej. "/v1/decoys/:id/test"
   // El bucket (nombre del cubo del límite) se declara aparte del patrón y
@@ -35,50 +45,84 @@ interface LimiteRuta {
   windowSeconds: number;
 }
 
-// Techo por defecto para todo lo no listado explícitamente abajo. Antes de
-// esta tarea, lo que no aparecía en RESTRICTED_PATHS no tenía límite
-// ninguno. Misma inversión que se hizo en la base de datos en la fase 0:
-// acotado por defecto, abierto por decisión explícita (añadiendo una
-// entrada más estricta a RESTRICTED_PATHS).
+// Techo por defecto para lo no listado explícitamente abajo. Antes de esta
+// tarea, lo que no aparecía en RESTRICTED_PATHS no tenía límite ninguno.
+// Misma inversión que se hizo en la base de datos en la fase 0: acotado por
+// defecto, abierto por decisión explícita (añadiendo una entrada más
+// estricta a RESTRICTED_PATHS).
 export const DEFAULT_BUCKET = "default";
 export const DEFAULT_LIMIT = 600;
 export const DEFAULT_WINDOW_SECONDS = 60;
 
-const RESTRICTED_PATHS: LimiteRuta[] = [
+/**
+ * ...pero el techo NO es universal, y esa acotación es el arreglo, no un
+ * descuido.
+ *
+ * Este Worker no es «la API»: es `api.nulldec.com`, y reenvía el proyecto de
+ * Supabase ENTERO sin condición sobre el pathname. Por aquí pasan `/rest/v1`
+ * (PostgREST) y `/auth/v1` (GoTrue) — las dos consolas apuntan ahí su cliente
+ * de supabase-js— además de `/realtime/v1`, `/storage/v1`… Un techo aplicado a
+ * todo el pathname metería un `rate_limit_check` secuencial (un viaje de ida y
+ * vuelta MÁS una escritura en Postgres) delante de cada lectura de PostgREST de
+ * la consola: justo lo contrario de la ronda de optimización del 2026-08-05.
+ *
+ * La restricción de la fase 1 es que ninguna ruta cambie de comportamiento. El
+ * techo se aplica por tanto solo a la superficie de API (`/v1/…` y su forma
+ * antigua `/functions/v1/…`), que es donde la fase 2 va a colgar los recursos
+ * REST; todo lo demás se reenvía sin límite de borde, exactamente como antes de
+ * la fase 1. Las 9 entradas explícitas de RESTRICTED_PATHS siguen aplicándose
+ * igual, estén donde estén.
+ *
+ * Si `/rest/v1` merece un techo propio es una decisión aparte —con su propio
+ * cubo, su propio límite y una medida del coste añadido por petición— y no se
+ * toma aquí.
+ */
+export function tieneTechoPorDefecto(pathname: string): boolean {
+  return pathname.startsWith("/v1/") || pathname.startsWith("/functions/v1/");
+}
+
+// Las NUEVE entradas declaran `method: "*"`. Ver el comentario de `method` en
+// `LimiteRuta`: es la semántica idéntica a la desplegada antes de la fase 1
+// (donde se casaba por sufijo, sin mirar el método), y estrechar cualquiera de
+// ellas es trabajo de la fase 2, no de aquí.
+export const RESTRICTED_PATHS: LimiteRuta[] = [
   // Categoría A — crean recursos reales de pago, en nuestra cuenta o en
   // la del propio cliente. Las más estrictas de todas.
-  { method: "POST", pattern: "/v1/aws-tenant-deploy-decoy", bucket: "aws-tenant-deploy", limit: 5, windowSeconds: 3600 },
-  { method: "POST", pattern: "/v1/azure-tenant-deploy-decoy", bucket: "azure-tenant-deploy", limit: 5, windowSeconds: 3600 },
-  { method: "POST", pattern: "/v1/github-actions-issue-decoy", bucket: "gh-actions-issue", limit: 60, windowSeconds: 3600 },
+  { method: "*", pattern: "/v1/aws-tenant-deploy-decoy", bucket: "aws-tenant-deploy", limit: 5, windowSeconds: 3600 },
+  { method: "*", pattern: "/v1/azure-tenant-deploy-decoy", bucket: "azure-tenant-deploy", limit: 5, windowSeconds: 3600 },
+  { method: "*", pattern: "/v1/github-actions-issue-decoy", bucket: "gh-actions-issue", limit: 60, windowSeconds: 3600 },
   // Categoría C — exponen datos sensibles o permiten generar claves.
   //
   // list-network-identifiers acepta GET y POST (verificado en el propio
-  // handler), de ahí el método comodín en vez de fijar uno solo.
+  // handler): un método fijo la habría relajado incluso antes de saber lo
+  // anterior.
   { method: "*", pattern: "/v1/list-network-identifiers", bucket: "list-net-ids", limit: 3, windowSeconds: 60 },
-  { method: "POST", pattern: "/v1/manage-siem-keys", bucket: "manage-siem-keys", limit: 10, windowSeconds: 3600 },
-  { method: "POST", pattern: "/v1/verify-turnstile", bucket: "verify-turnstile", limit: 20, windowSeconds: 3600 },
+  { method: "*", pattern: "/v1/manage-siem-keys", bucket: "manage-siem-keys", limit: 10, windowSeconds: 3600 },
+  { method: "*", pattern: "/v1/verify-turnstile", bucket: "verify-turnstile", limit: 20, windowSeconds: 3600 },
   // Envía correo real (Resend) a sales@nulldec.com — sin este límite, la
   // única barrera contra flood del buzón de ventas sería Turnstile, que un
   // humano decidido puede seguir resolviendo a mano una y otra vez. Una
   // consulta legítima es una acción puntual, no repetida — 5/hora es
   // generoso para eso y corta cualquier intento de saturar el buzón.
-  { method: "POST", pattern: "/v1/contact-sales", bucket: "contact-sales", limit: 5, windowSeconds: 3600 },
+  { method: "*", pattern: "/v1/contact-sales", bucket: "contact-sales", limit: 5, windowSeconds: 3600 },
   // Categoría B — puntos de entrada públicos, ya con secreto o firma,
   // pero conviene un techo aparte por si el secreto se filtrara.
   //
-  // handle-aws-signal NO está aquí a propósito: quien la llama siempre
-  // es la propia infraestructura de AWS (EventBridge), nunca el
-  // atacante directamente — limitar por IP distinguiría "AWS" de "todo
-  // lo demás", no "abuso" de "tráfico normal". La protege el secreto
-  // compartido y la Capa 1, no un límite por IP aquí.
-  { method: "POST", pattern: "/v1/handle-network-signal", bucket: "handle-network-signal", limit: 120, windowSeconds: 60 },
+  // handle-aws-signal no tiene límite ESPECÍFICO a propósito: quien la
+  // llama siempre es la propia infraestructura de AWS (EventBridge),
+  // nunca el atacante directamente — un cubo estricto por IP distinguiría
+  // "AWS" de "todo lo demás", no "abuso" de "tráfico normal". Lo que la
+  // protege de verdad es el secreto compartido y la Capa 1.
+  // Sí cae, eso sí, bajo el techo por defecto (600/60 s por IP), porque
+  // vive en `/v1/…`: no está exenta de límite, está exenta de uno propio.
+  { method: "*", pattern: "/v1/handle-network-signal", bucket: "handle-network-signal", limit: 120, windowSeconds: 60 },
   // Alta interacción — list-interactive-credentials, que era la ruta más
   // sensible de todo el sistema (exponía en claro las credenciales de
   // todos los clientes si el secreto global se filtraba), se eliminó del
   // paso 3 de esta tarea: devuelve 404 desde la fase 0 y el 2026-08-11, así
   // que ya no hay nada que limitar ahí. Queda handle-interactive-signal,
   // sin ese riesgo de exposición masiva, con su propio límite.
-  { method: "POST", pattern: "/v1/handle-interactive-signal", bucket: "handle-interactive-signal", limit: 60, windowSeconds: 60 },
+  { method: "*", pattern: "/v1/handle-interactive-signal", bucket: "handle-interactive-signal", limit: 60, windowSeconds: 60 },
 ];
 
 /**
@@ -136,23 +180,35 @@ async function checkAndIncrement(
   limit: number,
   windowSeconds: number,
 ): Promise<boolean> {
-  const res = await fetch(`https://${env.SUPABASE_HOST}/rest/v1/rpc/rate_limit_check`, {
-    method: "POST",
-    headers: {
-      "content-type": "application/json",
-      apikey: env.SUPABASE_ANON_KEY,
-      authorization: `Bearer ${env.SUPABASE_ANON_KEY}`,
-    },
-    body: JSON.stringify({ p_key: key, p_limit: limit, p_window_seconds: windowSeconds }),
-  });
-  if (!res.ok) {
-    // Falla en abierto a propósito: la autenticación real de estas rutas
-    // es el secreto/JWT, no el límite de tasa, así que un hipo de la base
-    // de datos no debe convertirse en un corte de tráfico legítimo.
-    console.error("rate_limit_check falló:", res.status, await res.text());
+  try {
+    const res = await fetch(`https://${env.SUPABASE_HOST}/rest/v1/rpc/rate_limit_check`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        apikey: env.SUPABASE_ANON_KEY,
+        authorization: `Bearer ${env.SUPABASE_ANON_KEY}`,
+      },
+      body: JSON.stringify({ p_key: key, p_limit: limit, p_window_seconds: windowSeconds }),
+    });
+    if (!res.ok) {
+      // Falla en abierto a propósito: la autenticación real de estas rutas
+      // es el secreto/JWT, no el límite de tasa, así que un hipo de la base
+      // de datos no debe convertirse en un corte de tráfico legítimo.
+      console.error("rate_limit_check falló:", res.status, await res.text());
+      return true;
+    }
+    return await res.json();
+  } catch (err) {
+    // El mismo fallo en abierto, pero para el caso que el `!res.ok` no
+    // cubre: `fetch` LANZA (DNS, TLS, corte de red contra Supabase) o el
+    // cuerpo no es JSON parseable. Sin este catch, la promesa rechazaba y
+    // el Worker devolvía un 1101/500 a una petición perfectamente legítima
+    // — es decir, un fallo de la base de datos SÍ cortaba el tráfico, justo
+    // lo que el `return true` de arriba existe para evitar. Es la misma
+    // decisión, no una nueva.
+    console.error("rate_limit_check lanzó:", err);
     return true;
   }
-  return await res.json();
 }
 
 function jsonResponse(body: unknown, status: number, extraHeaders: Record<string, string> = {}): Response {
@@ -185,18 +241,27 @@ export default {
 
     if (request.method !== "OPTIONS") {
       const restricted = matchRestrictedPath(request.method, url.pathname);
-      const bucket = restricted?.bucket ?? DEFAULT_BUCKET;
-      const limit = restricted?.limit ?? DEFAULT_LIMIT;
-      const windowSeconds = restricted?.windowSeconds ?? DEFAULT_WINDOW_SECONDS;
+      // Sin entrada explícita, solo hay límite si la ruta está en la
+      // superficie de API — ver `tieneTechoPorDefecto`. Fuera de ella
+      // (`/rest/v1`, `/auth/v1`, …) no se llama a la RPC siquiera: el coste
+      // del límite es una escritura en Postgres por petición y no se paga
+      // en el camino que la consola usa para leer.
+      const aplica = restricted !== undefined || tieneTechoPorDefecto(url.pathname);
 
-      const key = `rl:${bucket}:${clientIp}`;
-      const allowed = await checkAndIncrement(env, key, limit, windowSeconds);
-      if (!allowed) {
-        return jsonResponse(
-          { error: "límite de peticiones excedido para esta operación" },
-          429,
-          { "retry-after": String(windowSeconds) },
-        );
+      if (aplica) {
+        const bucket = restricted?.bucket ?? DEFAULT_BUCKET;
+        const limit = restricted?.limit ?? DEFAULT_LIMIT;
+        const windowSeconds = restricted?.windowSeconds ?? DEFAULT_WINDOW_SECONDS;
+
+        const key = `rl:${bucket}:${clientIp}`;
+        const allowed = await checkAndIncrement(env, key, limit, windowSeconds);
+        if (!allowed) {
+          return jsonResponse(
+            { error: "límite de peticiones excedido para esta operación" },
+            429,
+            { "retry-after": String(windowSeconds) },
+          );
+        }
       }
     }
 
