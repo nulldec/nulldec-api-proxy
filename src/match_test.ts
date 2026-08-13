@@ -23,9 +23,11 @@ import worker, {
   RESTRICTED_PATHS,
   matchRestrictedPath,
   pathMatchesPattern,
+  normalizarParaLimite,
   reescribirPrefijoV1,
   tieneTechoPorDefecto,
   type Env,
+  type LimiteRuta,
 } from "./index";
 
 describe("pathMatchesPattern", () => {
@@ -51,18 +53,33 @@ describe("matchRestrictedPath", () => {
 
   // El mecanismo de discriminación por método existe (lo pide el spec §6 y lo
   // necesitará la fase 2), pero NINGUNA de las nueve entradas reales lo usa:
-  // todas declaran "*". Esta prueba verifica el mecanismo con una entrada de
-  // prueba propia, para no fijar como correcto lo contrario de lo que las
-  // entradas reales hacen. La prueba de abajo ("las nueve entradas reales
-  // casan con cualquier verbo") es la que cubre las entradas de verdad.
-  it("el mecanismo del método discrimina cuando una entrada declara un verbo concreto", () => {
-    const entradaDePrueba = { method: "POST", pattern: "/v1/prueba/:id" };
-    const casa = (m: string, p: string) =>
-      (entradaDePrueba.method === "*" || entradaDePrueba.method === m) &&
-      pathMatchesPattern(p, entradaDePrueba.pattern);
+  // todas declaran "*". Esta prueba verifica el mecanismo con una fixture
+  // propia, para no fijar como correcto lo contrario de lo que las entradas
+  // reales hacen. La prueba de abajo ("las nueve entradas reales casan con
+  // cualquier verbo") es la que cubre las entradas de verdad.
+  //
+  // La fixture se le PASA a `matchRestrictedPath`: la versión anterior de esta
+  // prueba reimplementaba la condición del método sobre un objeto local, así
+  // que probaba su propia copia y no la función. Se demostró vacía borrando la
+  // comprobación del método de `matchRestrictedPath`: la suite entera seguía
+  // en verde.
+  const fixtureConMetodo: LimiteRuta[] = [
+    { method: "POST", pattern: "/v1/prueba/:id", bucket: "fixture", limit: 1, windowSeconds: 1 },
+  ];
 
-    expect(casa("POST", "/v1/prueba/abc")).toBe(true);
-    expect(casa("GET", "/v1/prueba/abc")).toBe(false);
+  it("el mecanismo del método discrimina cuando una entrada declara un verbo concreto", () => {
+    expect(matchRestrictedPath("POST", "/v1/prueba/abc", fixtureConMetodo)?.bucket).toBe("fixture");
+    expect(matchRestrictedPath("GET", "/v1/prueba/abc", fixtureConMetodo)).toBeUndefined();
+    expect(matchRestrictedPath("DELETE", "/v1/prueba/abc", fixtureConMetodo)).toBeUndefined();
+  });
+
+  it("una entrada '*' de la fixture sí casa cualquier verbo — los dos lados del mecanismo", () => {
+    const fixtureComodin: LimiteRuta[] = [
+      { method: "*", pattern: "/v1/prueba/:id", bucket: "fixture", limit: 1, windowSeconds: 1 },
+    ];
+    for (const metodo of ["GET", "POST", "DELETE"]) {
+      expect(matchRestrictedPath(metodo, "/v1/prueba/abc", fixtureComodin)?.bucket).toBe("fixture");
+    }
   });
 
   it("las nueve entradas reales casan con CUALQUIER verbo — no relajar lo desplegado", () => {
@@ -150,6 +167,24 @@ describe("tieneTechoPorDefecto", () => {
   it("'/v1' a secas, sin barra, no es la superficie de API", () => {
     expect(tieneTechoPorDefecto("/v1")).toBe(false);
   });
+
+  it("con las barras ya colapsadas, la forma con barra de más sí es superficie de API", () => {
+    expect(tieneTechoPorDefecto(normalizarParaLimite("//v1/algo"))).toBe(true);
+    expect(tieneTechoPorDefecto(normalizarParaLimite("///functions/v1/algo"))).toBe(true);
+  });
+});
+
+describe("normalizarParaLimite", () => {
+  it("colapsa cualquier repetición de barras", () => {
+    expect(normalizarParaLimite("//functions/v1/contact-sales")).toBe("/functions/v1/contact-sales");
+    expect(normalizarParaLimite("///v1/algo")).toBe("/v1/algo");
+    expect(normalizarParaLimite("/v1//algo///otro")).toBe("/v1/algo/otro");
+  });
+
+  it("no toca una ruta ya normal", () => {
+    expect(normalizarParaLimite("/v1/contact-sales")).toBe("/v1/contact-sales");
+    expect(normalizarParaLimite("/rest/v1/alerts")).toBe("/rest/v1/alerts");
+  });
 });
 
 describe("techo por defecto para rutas no listadas", () => {
@@ -199,6 +234,109 @@ describe("techo por defecto para rutas no listadas", () => {
     expect(body.p_key).toBe(`rl:${DEFAULT_BUCKET}:203.0.113.9`);
     expect(body.p_limit).toBe(DEFAULT_LIMIT);
     expect(body.p_window_seconds).toBe(DEFAULT_WINDOW_SECONDS);
+  });
+
+  // --- Barras repetidas: la forma que se saltaba TODOS los límites ---
+  //
+  // Cloudflare entrega el pathname sin colapsar las barras y esa forma llega a
+  // la función real (verificado contra producción: `//functions/v1/<lo que
+  // sea>` devuelve el NOT_FOUND del router de Supabase, no un error del
+  // borde). Sin normalizar, `//functions/v1/contact-sales` no casaba su
+  // entrada estricta (3 segmentos contra 2) ni la superficie de API, así que
+  // no se llamaba a la RPC en absoluto: ni cubo de 5/hora ni techo por
+  // defecto. Cero límite con una tecla de más, y alcanzaba a las dos rutas que
+  // crean recursos de pago reales.
+
+  it("//functions/v1/contact-sales cae en su cubo estricto, no se escapa del límite", async () => {
+    await worker.fetch(
+      new Request("https://api.nulldec.com//functions/v1/contact-sales", {
+        method: "POST",
+        headers: { "cf-connecting-ip": "203.0.113.9" },
+      }),
+      env,
+    );
+
+    const [llamada] = llamadasAlLimite();
+    expect(llamada, "debe llamarse a la RPC: esta forma no puede quedar sin límite").toBeDefined();
+    const [, init] = llamada as [RequestInfo, RequestInit];
+    const body = JSON.parse(init.body as string);
+    expect(body.p_key).toBe("rl:contact-sales:203.0.113.9");
+    expect(body.p_limit).toBe(5);
+    expect(body.p_window_seconds).toBe(3600);
+  });
+
+  it("//v1/contact-sales también cae en su cubo estricto", async () => {
+    await worker.fetch(
+      new Request("https://api.nulldec.com//v1/contact-sales", {
+        method: "POST",
+        headers: { "cf-connecting-ip": "203.0.113.9" },
+      }),
+      env,
+    );
+
+    const [llamada] = llamadasAlLimite();
+    expect(llamada).toBeDefined();
+    const [, init] = llamada as [RequestInfo, RequestInit];
+    expect(JSON.parse(init.body as string).p_key).toBe("rl:contact-sales:203.0.113.9");
+  });
+
+  it("///v1/algo-no-listado cae en el techo por defecto, no en la nada", async () => {
+    await worker.fetch(
+      new Request("https://api.nulldec.com///v1/algo-no-listado", {
+        method: "POST",
+        headers: { "cf-connecting-ip": "203.0.113.9" },
+      }),
+      env,
+    );
+
+    const [llamada] = llamadasAlLimite();
+    expect(llamada).toBeDefined();
+    const [, init] = llamada as [RequestInfo, RequestInit];
+    const body = JSON.parse(init.body as string);
+    expect(body.p_key).toBe(`rl:${DEFAULT_BUCKET}:203.0.113.9`);
+    expect(body.p_limit).toBe(DEFAULT_LIMIT);
+  });
+
+  it("las dos rutas de despliegue en la nube tampoco se escapan con barra de más", async () => {
+    // Son las que crean recursos de pago reales (5/hora). Se comprueban las
+    // dos explícitamente porque son el peor caso de este agujero.
+    for (const ruta of ["aws-tenant-deploy-decoy", "azure-tenant-deploy-decoy"]) {
+      fetchMock.mockClear();
+      await worker.fetch(
+        new Request(`https://api.nulldec.com//functions/v1/${ruta}`, {
+          method: "POST",
+          headers: { "cf-connecting-ip": "203.0.113.9" },
+        }),
+        env,
+      );
+      const [llamada] = llamadasAlLimite();
+      expect(llamada, `${ruta} debe pagar su límite`).toBeDefined();
+      const [, init] = llamada as [RequestInfo, RequestInit];
+      expect(JSON.parse(init.body as string).p_limit).toBe(5);
+    }
+  });
+
+  it("la normalización es SOLO para decidir: se reenvía el pathname original, con sus barras", async () => {
+    // El Worker no decide qué es "la misma ruta" para Supabase — eso es del
+    // router de funciones. Normalizar la URL saliente cambiaría el destino de
+    // la petición, no su límite, y la fase 1 se compromete a no tocar el
+    // reenvío de ninguna ruta.
+    await worker.fetch(
+      new Request("https://api.nulldec.com//functions/v1/contact-sales", {
+        method: "POST",
+        headers: { "cf-connecting-ip": "203.0.113.9" },
+      }),
+      env,
+    );
+
+    const reenviada = fetchMock.mock.calls.find(
+      ([input]) =>
+        urlDeEntrada(input).includes("example.supabase.co") &&
+        !urlDeEntrada(input).includes("rate_limit_check"),
+    );
+    expect(reenviada).toBeDefined();
+    const [entrada] = reenviada as [RequestInfo];
+    expect(urlDeEntrada(entrada)).toBe("https://example.supabase.co//functions/v1/contact-sales");
   });
 
   it("una lectura de PostgREST NO paga el límite: se reenvía sin llamar a la RPC", async () => {

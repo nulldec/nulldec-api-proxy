@@ -146,10 +146,53 @@ export function pathMatchesPattern(pathname: string, pattern: string): boolean {
   return patternSegments.every((seg, i) => seg.startsWith(":") || seg === pathSegments[i]);
 }
 
-export function matchRestrictedPath(method: string, pathname: string): LimiteRuta | undefined {
-  return RESTRICTED_PATHS.find(
+/**
+ * `entradas` es un parámetro con valor por defecto para poder probar el
+ * MECANISMO (la discriminación por método) con una fixture propia, llamando a
+ * esta misma función en vez de reimplementar su condición en la prueba. Una
+ * prueba que reimplementa lo que dice probar pasa aunque la función no haga
+ * nada: comprobado — borrar la comprobación del método de aquí dejaba la suite
+ * entera en verde. Todos los puntos de llamada reales omiten el argumento y
+ * siguen usando RESTRICTED_PATHS.
+ */
+export function matchRestrictedPath(
+  method: string,
+  pathname: string,
+  entradas: LimiteRuta[] = RESTRICTED_PATHS,
+): LimiteRuta | undefined {
+  return entradas.find(
     (r) => (r.method === "*" || r.method === method) && pathMatchesPattern(pathname, r.pattern),
   );
+}
+
+/**
+ * Colapsa barras repetidas. **Solo para DECIDIR el límite, nunca para lo que se
+ * reenvía.**
+ *
+ * Cloudflare entrega el pathname sin colapsar las barras, y esa forma llega a
+ * la función real: verificado contra producción, `api.nulldec.com//functions/v1/
+ * <lo-que-sea>` devuelve el `NOT_FOUND` del router de funciones de Supabase, no
+ * un error del borde. Sin colapsarlas aquí, `//functions/v1/contact-sales` no
+ * casa su entrada estricta (3 segmentos contra 2) NI la superficie de API
+ * (`startsWith("/v1/")` falla por la barra de más), así que se saltaba el cubo
+ * de 5/hora Y el techo por defecto: cero límite, con una sola tecla de más.
+ * Alcanzaba a `aws-tenant-deploy-decoy` y `azure-tenant-deploy-decoy`, que
+ * crean recursos de pago reales.
+ *
+ * Se normaliza en la dirección segura: casar de MÁS, nunca de menos. Que dos
+ * formas distintas de escribir la misma ruta compartan cubo es exactamente lo
+ * que se quiere; que una de ellas no tenga cubo, no.
+ *
+ * **Lo que se reenvía sigue siendo el pathname original, sin tocar.** El
+ * Worker no decide qué es la misma ruta para Supabase — eso es del router de
+ * funciones, y normalizar la URL saliente sería cambiar el destino de una
+ * petición, no su límite. Aquí se normaliza una COPIA para tomar una decisión,
+ * y se tira. Si alguien "simplifica" esto reasignando `url.pathname`, cambia el
+ * comportamiento de reenvío de la fase 1, que es justo lo que la fase 1 se
+ * compromete a no tocar.
+ */
+export function normalizarParaLimite(pathname: string): string {
+  return pathname.replace(/\/{2,}/g, "/");
 }
 
 /**
@@ -240,13 +283,17 @@ export default {
     const clientIp = request.headers.get("cf-connecting-ip") ?? "unknown";
 
     if (request.method !== "OPTIONS") {
-      const restricted = matchRestrictedPath(request.method, url.pathname);
+      // Barras colapsadas SOLO para decidir — ver `normalizarParaLimite`. La
+      // URL que se reenvía más abajo parte de `request.url` intacto.
+      const pathParaLimite = normalizarParaLimite(url.pathname);
+
+      const restricted = matchRestrictedPath(request.method, pathParaLimite);
       // Sin entrada explícita, solo hay límite si la ruta está en la
       // superficie de API — ver `tieneTechoPorDefecto`. Fuera de ella
       // (`/rest/v1`, `/auth/v1`, …) no se llama a la RPC siquiera: el coste
       // del límite es una escritura en Postgres por petición y no se paga
       // en el camino que la consola usa para leer.
-      const aplica = restricted !== undefined || tieneTechoPorDefecto(url.pathname);
+      const aplica = restricted !== undefined || tieneTechoPorDefecto(pathParaLimite);
 
       if (aplica) {
         const bucket = restricted?.bucket ?? DEFAULT_BUCKET;
