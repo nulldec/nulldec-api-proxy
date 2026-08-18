@@ -123,6 +123,30 @@ export const RESTRICTED_PATHS: LimiteRuta[] = [
   // que ya no hay nada que limitar ahí. Queda handle-interactive-signal,
   // sin ese riesgo de exposición masiva, con su propio límite.
   { method: "*", pattern: "/v1/handle-interactive-signal", bucket: "handle-interactive-signal", limit: 60, windowSeconds: 60 },
+
+  // ── Superficie del Agente NullDec (añadida 2026-08-18) ──
+  //
+  // Las tres estaban en el techo por defecto (600/60 s), y dos de ellas no
+  // deberían: son públicas (verify_jwt=false) y una de ellas CREA FILAS.
+  //
+  // agent-enroll: autenticado por un token que viaja dentro del paquete MSI
+  // que se reparte por toda la organización — hay que asumir que se filtra.
+  // El tope de usos del propio token es la barrera de "cuántas máquinas";
+  // esto es la barrera de "cuánto se puede machacar Postgres".
+  //
+  // El número tiene en cuenta el NAT: en un despliegue por Intune las 500
+  // máquinas de una sede salen por la MISMA IP pública, así que un límite
+  // demasiado estrecho rompería un despliegue legítimo. 120/min deja pasar
+  // una tanda de 120 máquinas por minuto —más rápido de lo que Intune
+  // entrega— y baja el techo de abuso de 36.000 a 7.200 altas por hora.
+  { method: "*", pattern: "/v1/agent-enroll", bucket: "agent-enroll", limit: 120, windowSeconds: 60 },
+
+  // handle-agent-signal es un endpoint de INGESTA, hermano de
+  // handle-network-signal (120/60) y handle-interactive-signal (60/60), y era
+  // el único de los tres sin límite propio. Se le pone el mismo que a
+  // handle-network-signal: son el mismo tipo de tráfico —una activación
+  // reportada desde la red del cliente— y no hay motivo para que difieran.
+  { method: "*", pattern: "/v1/handle-agent-signal", bucket: "handle-agent-signal", limit: 120, windowSeconds: 60 },
 ];
 
 /**

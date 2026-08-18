@@ -52,10 +52,10 @@ describe("matchRestrictedPath", () => {
   });
 
   // El mecanismo de discriminación por método existe (lo pide el spec §6 y lo
-  // necesitará la fase 2), pero NINGUNA de las nueve entradas reales lo usa:
+  // necesitará la fase 2), pero NINGUNA de las once entradas reales lo usa:
   // todas declaran "*". Esta prueba verifica el mecanismo con una fixture
   // propia, para no fijar como correcto lo contrario de lo que las entradas
-  // reales hacen. La prueba de abajo ("las nueve entradas reales casan con
+  // reales hacen. La prueba de abajo ("las once entradas reales casan con
   // cualquier verbo") es la que cubre las entradas de verdad.
   //
   // La fixture se le PASA a `matchRestrictedPath`: la versión anterior de esta
@@ -82,7 +82,7 @@ describe("matchRestrictedPath", () => {
     }
   });
 
-  it("las nueve entradas reales casan con CUALQUIER verbo — no relajar lo desplegado", () => {
+  it("las once entradas reales casan con CUALQUIER verbo — no relajar lo desplegado", () => {
     // Antes de la fase 1 el emparejador casaba por sufijo, sin mirar el
     // método: un `GET /v1/contact-sales` entraba en el cubo de 5/hora igual
     // que un POST. Estrechar una entrada a `method: "POST"` la deja fuera de
@@ -116,7 +116,7 @@ describe("matchRestrictedPath", () => {
  * propósito y se deja escrito el porqué.
  */
 describe("instantánea de los cubos vivos", () => {
-  it("los nueve {bucket, limit, windowSeconds} son exactamente estos", () => {
+  it("los once {bucket, limit, windowSeconds} son exactamente estos", () => {
     const instantanea = RESTRICTED_PATHS.map(({ bucket, limit, windowSeconds }) => ({
       bucket,
       limit,
@@ -133,6 +133,17 @@ describe("instantánea de los cubos vivos", () => {
       { bucket: "contact-sales", limit: 5, windowSeconds: 3600 },
       { bucket: "handle-network-signal", limit: 120, windowSeconds: 60 },
       { bucket: "handle-interactive-signal", limit: 60, windowSeconds: 60 },
+      // Añadidos el 2026-08-18 al cerrar la superficie del Agente. Los dos
+      // estaban en el techo por defecto (600/60 s) y no debían:
+      //   agent-enroll es PÚBLICO y CREA FILAS, autenticado por un token que
+      //     viaja en el paquete MSI de toda la organización — hay que asumir
+      //     que se filtra. 120/min contempla el NAT (500 máquinas de una sede
+      //     salen por la misma IP) y baja el techo de abuso de 36.000 a 7.200
+      //     altas/hora.
+      //   handle-agent-signal es ingesta, hermano de los dos de arriba, y era
+      //     el único de los tres sin límite propio.
+      { bucket: "agent-enroll", limit: 120, windowSeconds: 60 },
+      { bucket: "handle-agent-signal", limit: 120, windowSeconds: 60 },
     ]);
   });
 
