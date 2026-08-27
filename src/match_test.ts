@@ -52,10 +52,10 @@ describe("matchRestrictedPath", () => {
   });
 
   // El mecanismo de discriminación por método existe (lo pide el spec §6 y lo
-  // necesitará la fase 2), pero NINGUNA de las nueve entradas reales lo usa:
+  // necesitará la fase 2), pero NINGUNA de las once entradas reales lo usa:
   // todas declaran "*". Esta prueba verifica el mecanismo con una fixture
   // propia, para no fijar como correcto lo contrario de lo que las entradas
-  // reales hacen. La prueba de abajo ("las nueve entradas reales casan con
+  // reales hacen. La prueba de abajo ("las once entradas reales casan con
   // cualquier verbo") es la que cubre las entradas de verdad.
   //
   // La fixture se le PASA a `matchRestrictedPath`: la versión anterior de esta
@@ -82,7 +82,7 @@ describe("matchRestrictedPath", () => {
     }
   });
 
-  it("las nueve entradas reales casan con CUALQUIER verbo — no relajar lo desplegado", () => {
+  it("las once entradas reales casan con CUALQUIER verbo — no relajar lo desplegado", () => {
     // Antes de la fase 1 el emparejador casaba por sufijo, sin mirar el
     // método: un `GET /v1/contact-sales` entraba en el cubo de 5/hora igual
     // que un POST. Estrechar una entrada a `method: "POST"` la deja fuera de
@@ -105,7 +105,7 @@ describe("matchRestrictedPath", () => {
 });
 
 /**
- * Instantánea de los diez cubos (nueve nombres: `manage-siem-keys` sale dos veces,
+ * Instantánea de los doce cubos (nueve nombres: `manage-siem-keys` sale dos veces,
  * una por cada forma de la ruta de claves SIEM).
  *
  * `bucket`, `limit` y `windowSeconds` no son detalles de implementación: son
@@ -117,7 +117,7 @@ describe("matchRestrictedPath", () => {
  * propósito y se deja escrito el porqué.
  */
 describe("instantánea de los cubos vivos", () => {
-  it("los diez {bucket, limit, windowSeconds} son exactamente estos", () => {
+  it("los doce {bucket, limit, windowSeconds} son exactamente estos", () => {
     const instantanea = RESTRICTED_PATHS.map(({ bucket, limit, windowSeconds }) => ({
       bucket,
       limit,
@@ -125,7 +125,12 @@ describe("instantánea de los cubos vivos", () => {
     }));
 
     expect(instantanea).toEqual([
-      { bucket: "aws-tenant-deploy", limit: 5, windowSeconds: 3600 },
+      // Subido de 5 a 20/hora el 2026-08-27, a petición explícita del
+      // cliente que probaba BYOIaaS-AWS en real: 5/hora no daba margen para
+      // iterar corrigiendo la plantilla CloudFormation del lado del
+      // cliente. azure-tenant-deploy se queda en 5 — nadie ha pedido subirlo
+      // y sigue siendo la cifra deliberada de la fase 1.
+      { bucket: "aws-tenant-deploy", limit: 20, windowSeconds: 3600 },
       { bucket: "azure-tenant-deploy", limit: 5, windowSeconds: 3600 },
       { bucket: "gh-actions-issue", limit: 60, windowSeconds: 3600 },
       { bucket: "list-net-ids", limit: 3, windowSeconds: 60 },
@@ -138,6 +143,17 @@ describe("instantánea de los cubos vivos", () => {
       { bucket: "contact-sales", limit: 5, windowSeconds: 3600 },
       { bucket: "handle-network-signal", limit: 120, windowSeconds: 60 },
       { bucket: "handle-interactive-signal", limit: 60, windowSeconds: 60 },
+      // Añadidos el 2026-08-18 al cerrar la superficie del Agente. Los dos
+      // estaban en el techo por defecto (600/60 s) y no debían:
+      //   agent-enroll es PÚBLICO y CREA FILAS, autenticado por un token que
+      //     viaja en el paquete MSI de toda la organización — hay que asumir
+      //     que se filtra. 120/min contempla el NAT (500 máquinas de una sede
+      //     salen por la misma IP) y baja el techo de abuso de 36.000 a 7.200
+      //     altas/hora.
+      //   handle-agent-signal es ingesta, hermano de los dos de arriba, y era
+      //     el único de los tres sin límite propio.
+      { bucket: "agent-enroll", limit: 120, windowSeconds: 60 },
+      { bucket: "handle-agent-signal", limit: 120, windowSeconds: 60 },
     ]);
   });
 
@@ -303,9 +319,14 @@ describe("techo por defecto para rutas no listadas", () => {
   });
 
   it("las dos rutas de despliegue en la nube tampoco se escapan con barra de más", async () => {
-    // Son las que crean recursos de pago reales (5/hora). Se comprueban las
-    // dos explícitamente porque son el peor caso de este agujero.
-    for (const ruta of ["aws-tenant-deploy-decoy", "azure-tenant-deploy-decoy"]) {
+    // Son las que crean recursos de pago reales. Se comprueban las dos
+    // explícitamente porque son el peor caso de este agujero — cada una con
+    // su propio límite (ver la instantánea de los cubos de arriba para el
+    // porqué de que ya no sean el mismo número).
+    for (const [ruta, limiteEsperado] of [
+      ["aws-tenant-deploy-decoy", 20],
+      ["azure-tenant-deploy-decoy", 5],
+    ] as const) {
       fetchMock.mockClear();
       await worker.fetch(
         new Request(`https://api.nulldec.com//functions/v1/${ruta}`, {
@@ -317,7 +338,7 @@ describe("techo por defecto para rutas no listadas", () => {
       const [llamada] = llamadasAlLimite();
       expect(llamada, `${ruta} debe pagar su límite`).toBeDefined();
       const [, init] = llamada as [RequestInfo, RequestInit];
-      expect(JSON.parse(init.body as string).p_limit).toBe(5);
+      expect(JSON.parse(init.body as string).p_limit).toBe(limiteEsperado);
     }
   });
 
