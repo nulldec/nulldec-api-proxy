@@ -88,7 +88,7 @@ export function tieneTechoPorDefecto(pathname: string): boolean {
 export const RESTRICTED_PATHS: LimiteRuta[] = [
   // Categoría A — crean recursos reales de pago, en nuestra cuenta o en
   // la del propio cliente. Las más estrictas de todas.
-  { method: "*", pattern: "/v1/aws-tenant-deploy-decoy", bucket: "aws-tenant-deploy", limit: 5, windowSeconds: 3600 },
+  { method: "*", pattern: "/v1/aws-tenant-deploy-decoy", bucket: "aws-tenant-deploy", limit: 20, windowSeconds: 3600 },
   { method: "*", pattern: "/v1/azure-tenant-deploy-decoy", bucket: "azure-tenant-deploy", limit: 5, windowSeconds: 3600 },
   { method: "*", pattern: "/v1/github-actions-issue-decoy", bucket: "gh-actions-issue", limit: 60, windowSeconds: 3600 },
   // Categoría C — exponen datos sensibles o permiten generar claves.

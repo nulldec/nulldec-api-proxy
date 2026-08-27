@@ -124,7 +124,12 @@ describe("instantánea de los cubos vivos", () => {
     }));
 
     expect(instantanea).toEqual([
-      { bucket: "aws-tenant-deploy", limit: 5, windowSeconds: 3600 },
+      // Subido de 5 a 20/hora el 2026-08-27, a petición explícita del
+      // cliente que probaba BYOIaaS-AWS en real: 5/hora no daba margen para
+      // iterar corrigiendo la plantilla CloudFormation del lado del
+      // cliente. azure-tenant-deploy se queda en 5 — nadie ha pedido subirlo
+      // y sigue siendo la cifra deliberada de la fase 1.
+      { bucket: "aws-tenant-deploy", limit: 20, windowSeconds: 3600 },
       { bucket: "azure-tenant-deploy", limit: 5, windowSeconds: 3600 },
       { bucket: "gh-actions-issue", limit: 60, windowSeconds: 3600 },
       { bucket: "list-net-ids", limit: 3, windowSeconds: 60 },
@@ -309,9 +314,14 @@ describe("techo por defecto para rutas no listadas", () => {
   });
 
   it("las dos rutas de despliegue en la nube tampoco se escapan con barra de más", async () => {
-    // Son las que crean recursos de pago reales (5/hora). Se comprueban las
-    // dos explícitamente porque son el peor caso de este agujero.
-    for (const ruta of ["aws-tenant-deploy-decoy", "azure-tenant-deploy-decoy"]) {
+    // Son las que crean recursos de pago reales. Se comprueban las dos
+    // explícitamente porque son el peor caso de este agujero — cada una con
+    // su propio límite (ver la instantánea de los cubos de arriba para el
+    // porqué de que ya no sean el mismo número).
+    for (const [ruta, limiteEsperado] of [
+      ["aws-tenant-deploy-decoy", 20],
+      ["azure-tenant-deploy-decoy", 5],
+    ] as const) {
       fetchMock.mockClear();
       await worker.fetch(
         new Request(`https://api.nulldec.com//functions/v1/${ruta}`, {
@@ -323,7 +333,7 @@ describe("techo por defecto para rutas no listadas", () => {
       const [llamada] = llamadasAlLimite();
       expect(llamada, `${ruta} debe pagar su límite`).toBeDefined();
       const [, init] = llamada as [RequestInfo, RequestInit];
-      expect(JSON.parse(init.body as string).p_limit).toBe(5);
+      expect(JSON.parse(init.body as string).p_limit).toBe(limiteEsperado);
     }
   });
 
