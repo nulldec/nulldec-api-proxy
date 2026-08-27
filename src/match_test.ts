@@ -105,7 +105,8 @@ describe("matchRestrictedPath", () => {
 });
 
 /**
- * Instantánea de los nueve cubos.
+ * Instantánea de los diez cubos (nueve nombres: `manage-siem-keys` sale dos veces,
+ * una por cada forma de la ruta de claves SIEM).
  *
  * `bucket`, `limit` y `windowSeconds` no son detalles de implementación: son
  * la clave (`rl:<bucket>:<ip>`) de contadores VIVOS en producción. Renombrar un
@@ -116,7 +117,7 @@ describe("matchRestrictedPath", () => {
  * propósito y se deja escrito el porqué.
  */
 describe("instantánea de los cubos vivos", () => {
-  it("los nueve {bucket, limit, windowSeconds} son exactamente estos", () => {
+  it("los diez {bucket, limit, windowSeconds} son exactamente estos", () => {
     const instantanea = RESTRICTED_PATHS.map(({ bucket, limit, windowSeconds }) => ({
       bucket,
       limit,
@@ -128,6 +129,10 @@ describe("instantánea de los cubos vivos", () => {
       { bucket: "azure-tenant-deploy", limit: 5, windowSeconds: 3600 },
       { bucket: "gh-actions-issue", limit: 60, windowSeconds: 3600 },
       { bucket: "list-net-ids", limit: 3, windowSeconds: 60 },
+      // Dos entradas, UN cubo: `/v1/keys/siem` (nueva) y `/v1/manage-siem-keys`
+      // (vieja) comparten `manage-siem-keys` para que el limite sea 10/hora en
+      // total y no 10 por cada forma de escribir la ruta.
+      { bucket: "manage-siem-keys", limit: 10, windowSeconds: 3600 },
       { bucket: "manage-siem-keys", limit: 10, windowSeconds: 3600 },
       { bucket: "verify-turnstile", limit: 20, windowSeconds: 3600 },
       { bucket: "contact-sales", limit: 5, windowSeconds: 3600 },
@@ -584,5 +589,34 @@ describe("la reescritura se aplica al reenviar (integración con worker.fetch)",
     expect(proxiedCall).toBeDefined();
     const [proxiedInput] = proxiedCall as [RequestInfo];
     expect(urlDe(proxiedInput)).toBe("https://example.supabase.co/functions/v1/verify-turnstile");
+  });
+});
+
+describe("las claves SIEM, con la ruta vieja y con la nueva", () => {
+  // El emparejador exige MISMO NUMERO DE SEGMENTOS, asi que
+  // `/v1/manage-siem-keys` (2) no casa nunca con `/v1/keys/siem` (3). Al migrar
+  // el recurso `keys` a `/v1/`, la generacion de claves SIEM dejo de tener su
+  // cubo de 10/hora y se cayo al techo por defecto: 600/60 s, o sea 3.600 veces
+  // mas margen para generar credenciales de maquina.
+  it("la ruta NUEVA tiene limite propio, no el techo por defecto", () => {
+    const regla = matchRestrictedPath("POST", "/v1/keys/siem");
+    expect(regla, "/v1/keys/siem se ha quedado sin limite propio").toBeDefined();
+    expect(regla?.limit).toBe(10);
+    expect(regla?.windowSeconds).toBe(3600);
+  });
+
+  it("la ruta VIEJA sigue limitada mientras las dos formas convivan", () => {
+    const regla = matchRestrictedPath("POST", "/v1/manage-siem-keys");
+    expect(regla?.limit).toBe(10);
+    expect(regla?.windowSeconds).toBe(3600);
+  });
+
+  it("las dos comparten CUBO: si no, el limite real seria el doble", () => {
+    // Lo que de verdad sujeta el limite. Con cubos distintos, quien conozca las
+    // dos formas gasta 10 en cada una y se lleva 20/hora: el limite diria 10 y
+    // la realidad seria otra, que es la peor de las combinaciones.
+    const nueva = matchRestrictedPath("POST", "/v1/keys/siem");
+    const vieja = matchRestrictedPath("POST", "/v1/manage-siem-keys");
+    expect(nueva?.bucket).toBe(vieja?.bucket);
   });
 });

@@ -97,6 +97,22 @@ export const RESTRICTED_PATHS: LimiteRuta[] = [
   // handler): un método fijo la habría relajado incluso antes de saber lo
   // anterior.
   { method: "*", pattern: "/v1/list-network-identifiers", bucket: "list-net-ids", limit: 3, windowSeconds: 60 },
+  // ── Las claves SIEM, en sus DOS formas ──
+  // `pathMatchesPattern` exige mismo numero de segmentos, asi que
+  // `/v1/manage-siem-keys` (2) NO casa `/v1/keys/siem` (3). Al migrar el recurso
+  // `keys` a `/v1/` en la fase 2.2e, la generacion de claves SIEM se quedo sin
+  // cubo propio y cayo al techo por defecto: de 10/hora a 600/60 s, o sea 3.600
+  // veces mas margen para emitir credenciales de maquina. Nadie lo noto porque
+  // fallar en abierto es justo lo que hace este Worker cuando no encuentra regla.
+  //
+  // **El `bucket` es el MISMO a proposito, y es lo que de verdad sujeta el
+  // limite.** Con cubos distintos, quien conociera las dos formas gastaria 10 en
+  // cada una y se llevaria 20/hora: el limite diria 10 y la realidad seria otra.
+  //
+  // La entrada vieja se queda mientras las dos rutas convivan (spec 7: ruta nueva
+  // viva -> consumidores migrados -> se retira la vieja). Al borrar
+  // `manage-siem-keys` del backend se borra tambien su linea de aqui.
+  { method: "*", pattern: "/v1/keys/siem", bucket: "manage-siem-keys", limit: 10, windowSeconds: 3600 },
   { method: "*", pattern: "/v1/manage-siem-keys", bucket: "manage-siem-keys", limit: 10, windowSeconds: 3600 },
   { method: "*", pattern: "/v1/verify-turnstile", bucket: "verify-turnstile", limit: 20, windowSeconds: 3600 },
   // Envía correo real (Resend) a sales@nulldec.com — sin este límite, la
