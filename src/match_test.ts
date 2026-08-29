@@ -117,7 +117,7 @@ describe("matchRestrictedPath", () => {
  * propósito y se deja escrito el porqué.
  */
 describe("instantánea de los cubos vivos", () => {
-  it("los doce {bucket, limit, windowSeconds} son exactamente estos", () => {
+  it("los quince {bucket, limit, windowSeconds} son exactamente estos", () => {
     const instantanea = RESTRICTED_PATHS.map(({ bucket, limit, windowSeconds }) => ({
       bucket,
       limit,
@@ -154,6 +154,12 @@ describe("instantánea de los cubos vivos", () => {
       //     el único de los tres sin límite propio.
       { bucket: "agent-enroll", limit: 120, windowSeconds: 60 },
       { bucket: "handle-agent-signal", limit: 120, windowSeconds: 60 },
+      // Tres entradas, UN cubo. Tres porque el recurso tiene tres formas y el
+      // casado es estricto por número de segmentos; un cubo porque el límite
+      // es del recurso, no de cada forma de llamarlo.
+      { bucket: "passkeys", limit: 120, windowSeconds: 60 },
+      { bucket: "passkeys", limit: 120, windowSeconds: 60 },
+      { bucket: "passkeys", limit: 120, windowSeconds: 60 },
     ]);
   });
 
@@ -172,6 +178,41 @@ describe("instantánea de los cubos vivos", () => {
  * consolas. Un techo universal metería un viaje extra y una escritura en
  * Postgres delante de cada lectura de la consola.
  */
+describe("passkeys: las tres formas del recurso tienen cubo", () => {
+  // Esto es lo que se rompe si alguien colapsa las tres entradas en una:
+  // las rutas que no casen caen al techo por defecto (600/60 s) SIN NINGÚN
+  // síntoma. Es la misma trampa que dejó `manage-siem-keys` sin límite.
+  const conCubo = (metodo: string, ruta: string) =>
+    matchRestrictedPath(metodo, ruta)?.bucket;
+
+  it("la lista, el borrado y las cuatro POST caen todas en el cubo passkeys", () => {
+    expect(conCubo("GET", "/v1/passkeys")).toBe("passkeys");
+    expect(conCubo("DELETE", "/v1/passkeys/1f8c9e0a-1111-2222-3333-444455556666")).toBe("passkeys");
+    for (const r of [
+      "/v1/passkeys/registro/opciones",
+      "/v1/passkeys/registro/verificar",
+      "/v1/passkeys/step-up/opciones",
+      "/v1/passkeys/step-up/verificar",
+    ]) {
+      expect(conCubo("POST", r)).toBe("passkeys");
+    }
+  });
+
+  it("también con el prefijo viejo /functions/v1/", () => {
+    // El Worker acepta las dos formas; si solo casara la nueva, cualquiera
+    // podría esquivar el techo escribiendo la vieja.
+    expect(conCubo("POST", "/functions/v1/passkeys/step-up/opciones")).toBe("passkeys");
+    expect(conCubo("GET", "/functions/v1/passkeys")).toBe("passkeys");
+  });
+
+  it("una ruta de passkeys más profunda NO cae en el cubo — y hay que saberlo", () => {
+    // 5 segmentos no casa ninguna de las tres entradas. Hoy no existe ninguna
+    // ruta así; si mañana se añade, esta prueba obliga a declararle cubo en
+    // vez de dejarla caer callando al techo por defecto.
+    expect(conCubo("POST", "/v1/passkeys/step-up/opciones/extra")).toBeUndefined();
+  });
+});
+
 describe("tieneTechoPorDefecto", () => {
   it("la superficie de API sí: /v1/ y /functions/v1/", () => {
     expect(tieneTechoPorDefecto("/v1/verify-turnstile")).toBe(true);

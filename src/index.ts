@@ -163,6 +163,34 @@ export const RESTRICTED_PATHS: LimiteRuta[] = [
   // handle-network-signal: son el mismo tipo de tráfico —una activación
   // reportada desde la red del cliente— y no hay motivo para que difieran.
   { method: "*", pattern: "/v1/handle-agent-signal", bucket: "handle-agent-signal", limit: 120, windowSeconds: 60 },
+
+  // ── passkeys: TRES entradas, UN cubo ──
+  //
+  // Tres porque `pathMatchesPattern` casa estricto por número de segmentos, y
+  // el recurso tiene tres formas: `/v1/passkeys` (2), `/v1/passkeys/:id` (3) y
+  // `/v1/passkeys/:accion/:fase` (4, que cubre las cuatro rutas POST de
+  // registro y step-up). Una sola entrada dejaría las otras dos en el techo
+  // por defecto — que es exactamente cómo `manage-siem-keys` perdió su límite
+  // al migrar de `/v1/manage-siem-keys` a `/v1/keys/siem`.
+  //
+  // Un cubo porque el límite debe ser del RECURSO, no de cada forma de
+  // llamarlo: si no, pedir opciones y verificar tendrían 120 cada uno.
+  //
+  // 120/min y no menos por el NAT: una oficina entera sale por una IP, y
+  // dejar fuera a una sede de una consola de SEGURIDAD es peor fallo que el
+  // que este techo evita. Aun así baja el abuso de 36.000/hora a 7.200.
+  //
+  // ⚠️ Es un instrumento romo, y conviene saberlo: el Worker solo ve la IP,
+  // pero estas rutas exigen sesión autenticada con segundo factor, así que el
+  // abuso realista viene de UNA sesión comprometida — y contra eso lo que
+  // sirve es un límite por usuario, que solo puede aplicarse dentro de la
+  // función. Esto acota el daño; no lo previene.
+  //
+  // Lo que de verdad sujetaba el crecimiento de `webauthn_retos` es la purga
+  // horaria (migración 20260829180102), no este techo.
+  { method: "*", pattern: "/v1/passkeys", bucket: "passkeys", limit: 120, windowSeconds: 60 },
+  { method: "*", pattern: "/v1/passkeys/:id", bucket: "passkeys", limit: 120, windowSeconds: 60 },
+  { method: "*", pattern: "/v1/passkeys/:accion/:fase", bucket: "passkeys", limit: 120, windowSeconds: 60 },
 ];
 
 /**
