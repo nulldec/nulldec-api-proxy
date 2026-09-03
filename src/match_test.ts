@@ -42,9 +42,14 @@ describe("pathMatchesPattern", () => {
 });
 
 describe("matchRestrictedPath", () => {
-  it("/functions/v1/manage-siem-keys casa igual que /v1/manage-siem-keys (convivencia de prefijos)", () => {
-    const viaFunctions = matchRestrictedPath("POST", "/functions/v1/manage-siem-keys");
-    const viaV1 = matchRestrictedPath("POST", "/v1/manage-siem-keys");
+  // Lo que se prueba aqui es la NORMALIZACION del prefijo, no las claves SIEM:
+  // las dos formas de escribir la misma ruta tienen que caer en el mismo cubo, o
+  // quien conozca las dos se lleva el doble de limite. Usaba
+  // `/v1/manage-siem-keys` como sujeto; esa ruta murio con la funcion el
+  // 2026-09-03, asi que ahora usa la que la sustituyo.
+  it("/functions/v1/keys/siem casa igual que /v1/keys/siem (convivencia de prefijos)", () => {
+    const viaFunctions = matchRestrictedPath("POST", "/functions/v1/keys/siem");
+    const viaV1 = matchRestrictedPath("POST", "/v1/keys/siem");
     expect(viaFunctions).toBeDefined();
     expect(viaV1).toBeDefined();
     expect(viaFunctions?.bucket).toBe("manage-siem-keys");
@@ -105,8 +110,9 @@ describe("matchRestrictedPath", () => {
 });
 
 /**
- * Instantánea de los doce cubos (nueve nombres: `manage-siem-keys` sale dos veces,
- * una por cada forma de la ruta de claves SIEM).
+ * Instantánea de los once cubos. Eran doce hasta el 2026-09-03:
+ * `manage-siem-keys` salía dos veces, una por cada forma de la ruta de claves
+ * SIEM, y la vieja se fue con la Edge Function.
  *
  * `bucket`, `limit` y `windowSeconds` no son detalles de implementación: son
  * la clave (`rl:<bucket>:<ip>`) de contadores VIVOS en producción. Renombrar un
@@ -117,7 +123,7 @@ describe("matchRestrictedPath", () => {
  * propósito y se deja escrito el porqué.
  */
 describe("instantánea de los cubos vivos", () => {
-  it("los doce {bucket, limit, windowSeconds} son exactamente estos", () => {
+  it("los once {bucket, limit, windowSeconds} son exactamente estos", () => {
     const instantanea = RESTRICTED_PATHS.map(({ bucket, limit, windowSeconds }) => ({
       bucket,
       limit,
@@ -134,10 +140,9 @@ describe("instantánea de los cubos vivos", () => {
       { bucket: "azure-tenant-deploy", limit: 5, windowSeconds: 3600 },
       { bucket: "gh-actions-issue", limit: 60, windowSeconds: 3600 },
       { bucket: "list-net-ids", limit: 3, windowSeconds: 60 },
-      // Dos entradas, UN cubo: `/v1/keys/siem` (nueva) y `/v1/manage-siem-keys`
-      // (vieja) comparten `manage-siem-keys` para que el limite sea 10/hora en
-      // total y no 10 por cada forma de escribir la ruta.
-      { bucket: "manage-siem-keys", limit: 10, windowSeconds: 3600 },
+      // Una sola entrada desde el 2026-09-03. El NOMBRE del cubo se conserva
+      // aunque la ruta se llame ya `/v1/keys/siem`: `rl:manage-siem-keys:<ip>`
+      // son contadores vivos y renombrarlo los pone a cero sin avisar.
       { bucket: "manage-siem-keys", limit: 10, windowSeconds: 3600 },
       { bucket: "verify-turnstile", limit: 20, windowSeconds: 3600 },
       { bucket: "contact-sales", limit: 5, windowSeconds: 3600 },
@@ -613,31 +618,26 @@ describe("la reescritura se aplica al reenviar (integración con worker.fetch)",
   });
 });
 
-describe("las claves SIEM, con la ruta vieja y con la nueva", () => {
+describe("las claves SIEM", () => {
   // El emparejador exige MISMO NUMERO DE SEGMENTOS, asi que
-  // `/v1/manage-siem-keys` (2) no casa nunca con `/v1/keys/siem` (3). Al migrar
-  // el recurso `keys` a `/v1/`, la generacion de claves SIEM dejo de tener su
-  // cubo de 10/hora y se cayo al techo por defecto: 600/60 s, o sea 3.600 veces
-  // mas margen para generar credenciales de maquina.
-  it("la ruta NUEVA tiene limite propio, no el techo por defecto", () => {
+  // `/v1/manage-siem-keys` (2) no casaba nunca con `/v1/keys/siem` (3). Al
+  // migrar el recurso `keys` a `/v1/`, la generacion de claves SIEM dejo de
+  // tener su cubo de 10/hora y se cayo al techo por defecto: 600/60 s, o sea
+  // 3.600 veces mas margen para generar credenciales de maquina. Esta prueba es
+  // lo que impide que vuelva a pasar.
+  it("la ruta tiene limite propio, no el techo por defecto", () => {
     const regla = matchRestrictedPath("POST", "/v1/keys/siem");
     expect(regla, "/v1/keys/siem se ha quedado sin limite propio").toBeDefined();
     expect(regla?.limit).toBe(10);
     expect(regla?.windowSeconds).toBe(3600);
   });
 
-  it("la ruta VIEJA sigue limitada mientras las dos formas convivan", () => {
-    const regla = matchRestrictedPath("POST", "/v1/manage-siem-keys");
-    expect(regla?.limit).toBe(10);
-    expect(regla?.windowSeconds).toBe(3600);
-  });
-
-  it("las dos comparten CUBO: si no, el limite real seria el doble", () => {
-    // Lo que de verdad sujeta el limite. Con cubos distintos, quien conozca las
-    // dos formas gasta 10 en cada una y se lleva 20/hora: el limite diria 10 y
-    // la realidad seria otra, que es la peor de las combinaciones.
-    const nueva = matchRestrictedPath("POST", "/v1/keys/siem");
-    const vieja = matchRestrictedPath("POST", "/v1/manage-siem-keys");
-    expect(nueva?.bucket).toBe(vieja?.bucket);
+  // La forma vieja se retiro con la Edge Function `manage-siem-keys` el
+  // 2026-09-03. Que ya no case NO la deja sin techo: cae al limite por defecto
+  // del Worker, y detras no hay funcion — es un 404. Se afirma para que quede
+  // claro que la ausencia es deliberada y no un patron que se cayo al editar.
+  it("la ruta VIEJA ya no tiene regla propia: se retiro con su funcion", () => {
+    expect(matchRestrictedPath("POST", "/v1/manage-siem-keys")).toBeUndefined();
+    expect(matchRestrictedPath("POST", "/functions/v1/manage-siem-keys")).toBeUndefined();
   });
 });
