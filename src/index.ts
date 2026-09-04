@@ -133,6 +133,29 @@ export const RESTRICTED_PATHS: LimiteRuta[] = [
   // despliegue, que es el caso real.
   { method: "*", pattern: "/v1/keys/agent/enrollment", bucket: "agent-enrollment", limit: 10, windowSeconds: 3600 },
 
+  // ── Las dos rutas de la documentacion privada (2026-09-04) ──
+  //
+  // Sin entrada propia caerian al techo por defecto (600/60 s). No es que
+  // 600 sea absurdo aqui; es que las dos cosas que pasan por estas rutas
+  // merecen limites DISTINTOS, y con un solo cubo compartido la que se abusa
+  // estrangula a la otra.
+  //
+  // `/v1/docs/ticket` emite una CREDENCIAL de entrada. Se pide una por clic en
+  // "Documentacion", asi que 60/hora es holgado para una persona y ridiculo
+  // para un bucle. Ademas `emitir_docs_ticket()` aplica su propio tope de 5
+  // vales vivos por persona, que es la barrera de verdad: esto es el techo de
+  // borde que evita que el bucle llegue siquiera a la base.
+  //
+  // `/v1/docs/sesion` la llama el SERVIDOR de docs, no un navegador, y una vez
+  // por entrada. El limite alto es deliberado: el cubo es por IP, y todas las
+  // peticiones legitimas salen de las MISMAS IPs (los datacenters de
+  // Cloudflare Pages), asi que un techo estrecho aqui lo agotaria el trafico
+  // bueno de toda la clientela junta y dejaria a nadie entrar en la
+  // documentacion. Quien no tenga el secreto compartido recibe 401 de todas
+  // formas.
+  { method: "*", pattern: "/v1/docs/ticket", bucket: "docs-ticket", limit: 60, windowSeconds: 3600 },
+  { method: "*", pattern: "/v1/docs/sesion", bucket: "docs-sesion", limit: 600, windowSeconds: 60 },
+
   // ── El envio de prueba de canales ──
   // Manda correo (Resend), Telegram y Slack DE VERDAD, a los destinos que la
   // organizacion tenga puestos. Mismo razonamiento que `/v1/contact-sales` de
