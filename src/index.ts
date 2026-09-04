@@ -113,6 +113,40 @@ export const RESTRICTED_PATHS: LimiteRuta[] = [
   // son contadores vivos en produccion y renombrarlo los pondria a cero para
   // todo el mundo durante una ventana entera, sin dejar rastro.
   { method: "*", pattern: "/v1/keys/siem", bucket: "manage-siem-keys", limit: 10, windowSeconds: 3600 },
+
+  // ── El alta de agentes por token de organizacion ──
+  // Mismo criterio que la linea de arriba, y con mas alcance: una clave SIEM
+  // deja leer; un token de enrolamiento da de alta AGENTES en la organizacion
+  // entera, y sirve para todas las maquinas que quepan en su `max_uses`. Es la
+  // credencial mas amplia que emite el producto.
+  //
+  // Sin esta regla caia al techo por defecto (600/60 s), que es exactamente el
+  // agujero que la migracion de `keys` abrio con las claves SIEM y que nadie
+  // noto durante una fase entera: este Worker falla en ABIERTO cuando no
+  // encuentra patron, asi que una ruta nueva sin linea aqui no da error, da
+  // barra libre.
+  //
+  // Tres segmentos, y el `*` NO es descuido: el `GET` de la misma ruta lista
+  // los tokens y no cuesta nada, pero un cubo por verbo obligaria a repetir la
+  // entrada y la asimetria entre leer y emitir ya la impone el backend
+  // (`mfa: true` solo en el POST). 10/hora es de sobra para una campana de
+  // despliegue, que es el caso real.
+  { method: "*", pattern: "/v1/keys/agent/enrollment", bucket: "agent-enrollment", limit: 10, windowSeconds: 3600 },
+
+  // ── El envio de prueba de canales ──
+  // Manda correo (Resend), Telegram y Slack DE VERDAD, a los destinos que la
+  // organizacion tenga puestos. Mismo razonamiento que `/v1/contact-sales` de
+  // mas abajo: sin techo, la unica barrera contra usar nuestra
+  // infraestructura para floodear un buzon o un canal de Slack es que a nadie
+  // se le ocurra.
+  //
+  // La diferencia con `contact-sales` es que aqui hace falta sesion, asi que
+  // el atacante ya es un cliente identificado y auditado. Por eso 20/hora y no
+  // 5: comprobar que un canal recien configurado funciona es algo que se hace
+  // varias veces seguidas, y estrangularlo devolveria a la situacion que la
+  // prueba existe para evitar — enterarse de que Slack no llega el dia del
+  // primer ataque de verdad.
+  { method: "*", pattern: "/v1/preferences/test", bucket: "preferences-test", limit: 20, windowSeconds: 3600 },
   { method: "*", pattern: "/v1/verify-turnstile", bucket: "verify-turnstile", limit: 20, windowSeconds: 3600 },
   // Envía correo real (Resend) a sales@nulldec.com — sin este límite, la
   // única barrera contra flood del buzón de ventas sería Turnstile, que un
