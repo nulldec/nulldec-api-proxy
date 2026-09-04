@@ -110,9 +110,15 @@ describe("matchRestrictedPath", () => {
 });
 
 /**
- * Instantánea de los trece cubos. Eran once hasta el 2026-09-04, cuando
- * `/v1/keys/agent/enrollment` y `/v1/preferences/test` estrenaron el suyo. Eran
- * doce hasta el 2026-09-03:
+ * Instantánea de las dieciséis ENTRADAS, que son CATORCE cubos: `passkeys`
+ * aparece tres veces, una por cada forma de su ruta, y las tres comparten
+ * contador a propósito. Por eso el rótulo cuenta entradas y no cubos — la
+ * instantánea mapea el array, y colapsar las tres filas escondería justo lo
+ * que hay que vigilar.
+ *
+ * Eran once entradas hasta el 2026-09-04, cuando `/v1/keys/agent/enrollment`,
+ * `/v1/preferences/test` y las tres de `passkeys` estrenaron cubo. Eran doce
+ * hasta el 2026-09-03:
  * `manage-siem-keys` salía dos veces, una por cada forma de la ruta de claves
  * SIEM, y la vieja se fue con la Edge Function.
  *
@@ -125,7 +131,7 @@ describe("matchRestrictedPath", () => {
  * propósito y se deja escrito el porqué.
  */
 describe("instantánea de los cubos vivos", () => {
-  it("los trece {bucket, limit, windowSeconds} son exactamente estos", () => {
+  it("las dieciséis entradas —catorce cubos— son exactamente estas", () => {
     const instantanea = RESTRICTED_PATHS.map(({ bucket, limit, windowSeconds }) => ({
       bucket,
       limit,
@@ -170,6 +176,12 @@ describe("instantánea de los cubos vivos", () => {
       //     el único de los tres sin límite propio.
       { bucket: "agent-enroll", limit: 120, windowSeconds: 60 },
       { bucket: "handle-agent-signal", limit: 120, windowSeconds: 60 },
+      // Tres entradas, UN cubo. Tres porque el recurso tiene tres formas y el
+      // casado es estricto por número de segmentos; un cubo porque el límite
+      // es del recurso, no de cada forma de llamarlo.
+      { bucket: "passkeys", limit: 120, windowSeconds: 60 },
+      { bucket: "passkeys", limit: 120, windowSeconds: 60 },
+      { bucket: "passkeys", limit: 120, windowSeconds: 60 },
     ]);
   });
 
@@ -177,6 +189,53 @@ describe("instantánea de los cubos vivos", () => {
     expect(DEFAULT_BUCKET).toBe("default");
     expect(DEFAULT_LIMIT).toBe(600);
     expect(DEFAULT_WINDOW_SECONDS).toBe(60);
+  });
+});
+
+describe("passkeys: las tres formas del recurso tienen cubo", () => {
+  // Esto es lo que se rompe si alguien colapsa las tres entradas en una:
+  // las rutas que no casen caen al techo por defecto (600/60 s) SIN NINGÚN
+  // síntoma. Es la misma trampa que dejó `manage-siem-keys` sin límite.
+  const conCubo = (metodo: string, ruta: string) =>
+    matchRestrictedPath(metodo, ruta)?.bucket;
+
+  it("la lista, el borrado y las cuatro POST caen todas en el cubo passkeys", () => {
+    expect(conCubo("GET", "/v1/passkeys")).toBe("passkeys");
+    expect(conCubo("DELETE", "/v1/passkeys/1f8c9e0a-1111-2222-3333-444455556666")).toBe("passkeys");
+    for (const r of [
+      "/v1/passkeys/registro/opciones",
+      "/v1/passkeys/registro/verificar",
+      "/v1/passkeys/step-up/opciones",
+      "/v1/passkeys/step-up/verificar",
+    ]) {
+      expect(conCubo("POST", r)).toBe("passkeys");
+    }
+  });
+
+  it("también con el prefijo viejo /functions/v1/", () => {
+    // El Worker acepta las dos formas; si solo casara la nueva, cualquiera
+    // podría esquivar el techo escribiendo la vieja.
+    expect(conCubo("POST", "/functions/v1/passkeys/step-up/opciones")).toBe("passkeys");
+    expect(conCubo("GET", "/functions/v1/passkeys")).toBe("passkeys");
+  });
+
+  it("no se pisa con el otro patrón de cuatro segmentos que hay ahora", () => {
+    // `/v1/passkeys/:accion/:fase` y `/v1/keys/agent/enrollment` tienen el
+    // mismo número de segmentos y llegaron con dos semanas de diferencia. El
+    // literal del segundo segmento (`passkeys` vs `keys`) es lo único que los
+    // separa, así que se afirma en vez de darse por hecho: un comodín de más
+    // en cualquiera de los dos se llevaría el tráfico del otro a su contador,
+    // y el síntoma sería un límite que salta antes de tiempo en la ruta
+    // equivocada — de los que cuesta días atribuir.
+    expect(conCubo("POST", "/v1/keys/agent/enrollment")).toBe("agent-enrollment");
+    expect(conCubo("POST", "/v1/passkeys/registro/opciones")).toBe("passkeys");
+  });
+
+  it("una ruta de passkeys más profunda NO cae en el cubo — y hay que saberlo", () => {
+    // 5 segmentos no casa ninguna de las tres entradas. Hoy no existe ninguna
+    // ruta así; si mañana se añade, esta prueba obliga a declararle cubo en
+    // vez de dejarla caer callando al techo por defecto.
+    expect(conCubo("POST", "/v1/passkeys/step-up/opciones/extra")).toBeUndefined();
   });
 });
 
