@@ -110,7 +110,9 @@ describe("matchRestrictedPath", () => {
 });
 
 /**
- * Instantánea de los once cubos. Eran doce hasta el 2026-09-03:
+ * Instantánea de los trece cubos. Eran once hasta el 2026-09-04, cuando
+ * `/v1/keys/agent/enrollment` y `/v1/preferences/test` estrenaron el suyo. Eran
+ * doce hasta el 2026-09-03:
  * `manage-siem-keys` salía dos veces, una por cada forma de la ruta de claves
  * SIEM, y la vieja se fue con la Edge Function.
  *
@@ -123,7 +125,7 @@ describe("matchRestrictedPath", () => {
  * propósito y se deja escrito el porqué.
  */
 describe("instantánea de los cubos vivos", () => {
-  it("los once {bucket, limit, windowSeconds} son exactamente estos", () => {
+  it("los trece {bucket, limit, windowSeconds} son exactamente estos", () => {
     const instantanea = RESTRICTED_PATHS.map(({ bucket, limit, windowSeconds }) => ({
       bucket,
       limit,
@@ -144,6 +146,15 @@ describe("instantánea de los cubos vivos", () => {
       // aunque la ruta se llame ya `/v1/keys/siem`: `rl:manage-siem-keys:<ip>`
       // son contadores vivos y renombrarlo los pone a cero sin avisar.
       { bucket: "manage-siem-keys", limit: 10, windowSeconds: 3600 },
+      // Un token de enrolamiento da de alta AGENTES en la organización entera:
+      // más alcance que una clave SIEM, mismo techo. 10/hora sobra para una
+      // campaña de despliegue, que es el caso real.
+      { bucket: "agent-enrollment", limit: 10, windowSeconds: 3600 },
+      // Manda correo, Telegram y Slack de verdad. 20 y no 5 como
+      // `contact-sales` porque aquí hace falta sesión —el llamante es un
+      // cliente identificado— y comprobar un canal recién configurado se hace
+      // varias veces seguidas.
+      { bucket: "preferences-test", limit: 20, windowSeconds: 3600 },
       { bucket: "verify-turnstile", limit: 20, windowSeconds: 3600 },
       { bucket: "contact-sales", limit: 5, windowSeconds: 3600 },
       { bucket: "handle-network-signal", limit: 120, windowSeconds: 60 },
@@ -639,5 +650,57 @@ describe("las claves SIEM", () => {
   it("la ruta VIEJA ya no tiene regla propia: se retiro con su funcion", () => {
     expect(matchRestrictedPath("POST", "/v1/manage-siem-keys")).toBeUndefined();
     expect(matchRestrictedPath("POST", "/functions/v1/manage-siem-keys")).toBeUndefined();
+  });
+});
+
+/**
+ * Los dos cubos que estrenaron el 2026-09-04, y el hueco DELIBERADO que dejan.
+ *
+ * Las dos rutas nacieron al migrar las últimas acciones de
+ * `manage-notifications` y `manage-agent-keys` a sus recursos `/v1/`. Sin línea
+ * aquí habrían caído al techo por defecto (600/60 s), que es el mismo agujero
+ * que las claves SIEM tuvieron durante una fase entera sin que nadie lo notara:
+ * este Worker falla en ABIERTO cuando no encuentra patrón, así que una ruta
+ * nueva sin cubo no da error, da barra libre.
+ */
+describe("los cubos de enrolamiento de agente y prueba de canales", () => {
+  it("emitir un token de alta tiene techo propio, no el de por defecto", () => {
+    const regla = matchRestrictedPath("POST", "/v1/keys/agent/enrollment");
+    expect(regla, "/v1/keys/agent/enrollment se ha quedado sin límite propio").toBeDefined();
+    expect(regla?.limit).toBe(10);
+    expect(regla?.windowSeconds).toBe(3600);
+  });
+
+  it("la forma con prefijo viejo casa igual", () => {
+    // `normalizarRuta` reescribe `/functions/v1/...` a `/v1/...` antes de
+    // comparar, y las dos formas siguen vivas mientras la consola migra.
+    expect(matchRestrictedPath("POST", "/functions/v1/keys/agent/enrollment")).toBeDefined();
+  });
+
+  it("el envío de prueba tiene techo propio", () => {
+    const regla = matchRestrictedPath("POST", "/v1/preferences/test");
+    expect(regla, "/v1/preferences/test se ha quedado sin límite propio").toBeDefined();
+    expect(regla?.limit).toBe(20);
+    expect(regla?.windowSeconds).toBe(3600);
+  });
+
+  it("REVOCAR un token NO tiene cubo, y es a propósito", () => {
+    // `pathMatchesPattern` exige mismo número de segmentos, así que
+    // `/v1/keys/agent/enrollment/:id` (cuatro) no casa con el patrón de tres.
+    // Es exactamente la clase de detalle que dejó a las claves SIEM sin techo,
+    // así que se afirma en vez de suponerse.
+    //
+    // Aquí la ausencia es correcta: revocar solo QUITA capacidad. Un abuso de
+    // esta ruta no emite nada ni escribe a terceros — como mucho revoca tokens
+    // de la propia organización, que ya requiere sesión de admin. Ponerle un
+    // techo estrecho sería, además, empujar a no cerrar la puerta.
+    expect(matchRestrictedPath("DELETE", "/v1/keys/agent/enrollment/tok-1")).toBeUndefined();
+  });
+
+  it("y no se comen las rutas vecinas de `keys`", () => {
+    // El patrón de tres segmentos no puede robarle nada a `/v1/keys/siem` ni
+    // al listado genérico `/v1/keys/agent`.
+    expect(matchRestrictedPath("GET", "/v1/keys/siem")?.bucket).toBe("manage-siem-keys");
+    expect(matchRestrictedPath("GET", "/v1/keys/agent")).toBeUndefined();
   });
 });
