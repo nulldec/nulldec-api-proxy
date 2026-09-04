@@ -120,7 +120,8 @@ describe("matchRestrictedPath", () => {
  * `/v1/preferences/test` y las tres de `passkeys` estrenaron cubo. Eran doce
  * hasta el 2026-09-03:
  * `manage-siem-keys` salía dos veces, una por cada forma de la ruta de claves
- * SIEM, y la vieja se fue con la Edge Function.
+ * SIEM, y la vieja se fue con la Edge Function. Dieciocho desde el
+ * 2026-09-04: las dos rutas de la documentación privada.
  *
  * `bucket`, `limit` y `windowSeconds` no son detalles de implementación: son
  * la clave (`rl:<bucket>:<ip>`) de contadores VIVOS en producción. Renombrar un
@@ -131,7 +132,7 @@ describe("matchRestrictedPath", () => {
  * propósito y se deja escrito el porqué.
  */
 describe("instantánea de los cubos vivos", () => {
-  it("las dieciséis entradas —catorce cubos— son exactamente estas", () => {
+  it("las dieciocho entradas —dieciséis cubos— son exactamente estas", () => {
     const instantanea = RESTRICTED_PATHS.map(({ bucket, limit, windowSeconds }) => ({
       bucket,
       limit,
@@ -156,6 +157,19 @@ describe("instantánea de los cubos vivos", () => {
       // más alcance que una clave SIEM, mismo techo. 10/hora sobra para una
       // campaña de despliegue, que es el caso real.
       { bucket: "agent-enrollment", limit: 10, windowSeconds: 3600 },
+      // Las dos de la documentación privada, añadidas el 2026-09-04. Cubos
+      // SEPARADOS a propósito: una emite credenciales de entrada desde un
+      // navegador y la otra la llama el servidor de docs. Con un cubo
+      // compartido, abusar de la primera dejaría a todo el mundo sin poder
+      // canjear.
+      //
+      // `docs-sesion` es alto (600/60 s) porque el cubo es por IP y TODAS las
+      // llamadas legítimas salen de las mismas IPs —los datacenters de
+      // Cloudflare Pages—, así que un techo estrecho lo agotaría el tráfico
+      // bueno de toda la clientela junta. Quien no tenga el secreto compartido
+      // recibe 401 igual.
+      { bucket: "docs-ticket", limit: 60, windowSeconds: 3600 },
+      { bucket: "docs-sesion", limit: 600, windowSeconds: 60 },
       // Manda correo, Telegram y Slack de verdad. 20 y no 5 como
       // `contact-sales` porque aquí hace falta sesión —el llamante es un
       // cliente identificado— y comprobar un canal recién configurado se hace
