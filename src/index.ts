@@ -20,6 +20,20 @@
 export interface Env {
   SUPABASE_HOST: string;
   SUPABASE_ANON_KEY: string;
+  /**
+   * Secreto compartido con las Edge Functions, que autoriza la cabecera
+   * `x-real-ip` que este Worker inyecta. Ver `cabecerasHaciaSupabase`.
+   *
+   * Se pone con `npx wrangler secret put PROXY_SHARED_SECRET`, nunca en
+   * `wrangler.toml` ni en git: quien lo tenga puede decidir en qué cubo de
+   * límite cae, que es exactamente lo que la cabecera viene a controlar.
+   *
+   * OPCIONAL a propósito. Sin él, el Worker no manda `x-nd-proxy`, la Edge
+   * Function no se cree el `x-real-ip` y cae a `cf-connecting-ip` — el
+   * comportamiento de antes. Eso permite desplegar backend primero y Worker
+   * después sin ninguna ventana rara, que es el orden que pide el arreglo.
+   */
+  PROXY_SHARED_SECRET?: string;
 }
 
 export interface LimiteRuta {
@@ -401,6 +415,60 @@ function jsonResponse(body: unknown, status: number, extraHeaders: Record<string
   });
 }
 
+/**
+ * Las cabeceras con las que se reenvía la petición a Supabase.
+ *
+ * ── El problema que resuelve (medido el 2026-09-07) ──
+ *
+ * `cf-connecting-ip` NO sobrevive a este salto. El Cloudflare que Supabase
+ * tiene delante la SOBRESCRIBE con el par de conexión, y en el camino
+ * `navegador → api.nulldec.com → Supabase` ese par es este Worker. Así que las
+ * Edge Functions veían siempre la misma IP —un rango de Cloudflare— y sus
+ * límites de tasa, que creen ser por cliente, eran GLOBALES.
+ *
+ * Una sola petición pública a `/v1/sso/resolver` dejó las dos filas a 0,9 s:
+ *
+ *     rl:default:160.79.106.128               ← lo que ve este Worker
+ *     rl:fn:sso-resolver:2a06:98c0:3600::103  ← lo que veía la Edge Function
+ *
+ * El efecto: ~1-2 req/s GLOBALES para el login SSO de toda la plataforma, y
+ * 6/min para la previsualización de invitaciones. Falla hacia limitar de más
+ * —no hay puerta abierta— pero desde una máquina cualquiera se deja sin SSO a
+ * todos los clientes a la vez.
+ *
+ * ── Por qué va con secreto y no a pelo ──
+ *
+ * `x-real-ip` la puede poner cualquiera que llame directo a `<ref>.supabase.co`
+ * saltándose este Worker, y ahí está el relé de OpenCanary haciéndolo a diario.
+ * Aceptarla sin verificar convertiría TODOS los límites en decorativos:
+ * bastaría mandar una IP distinta en cada petición para tener un cubo nuevo
+ * cada vez. Es literalmente el agujero que `_shared/rate-limit.ts` vino a
+ * cerrar. El secreto es lo que distingue «esta IP la puso el borde» de «esta
+ * IP la puso quien llama».
+ *
+ * ── Por qué `x-real-ip` y no `x-forwarded-for` ──
+ *
+ * `x-forwarded-for` es una lista de saltos y el Cloudflare de Supabase le
+ * añade el suyo, así que el lado del que hay que leer depende de por dónde
+ * entró la petición. `x-real-ip` es un solo valor y lo escribimos nosotros
+ * enteros: no hay nada que interpretar al otro lado.
+ */
+export function cabecerasHaciaSupabase(request: Request, env: Env, clientIp: string): Headers {
+  const cabeceras = new Headers(request.headers);
+  // Se BORRAN las dos primero, siempre. Sin esto, quien llame a
+  // `api.nulldec.com` con su propio `x-nd-proxy` y su propio `x-real-ip`
+  // tendría el par completo intacto si el Worker no tiene secreto
+  // configurado — y con el secreto correcto adivinado, elegiría su cubo. Se
+  // limpian y solo las repone este Worker.
+  cabeceras.delete("x-real-ip");
+  cabeceras.delete("x-nd-proxy");
+  if (env.PROXY_SHARED_SECRET && clientIp !== "unknown") {
+    cabeceras.set("x-real-ip", clientIp);
+    cabeceras.set("x-nd-proxy", env.PROXY_SHARED_SECRET);
+  }
+  return cabeceras;
+}
+
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
@@ -448,7 +516,22 @@ export default {
     // y `protocol` — una sola parada para las mutaciones de la URL
     // saliente. `search` y `hash` no se tocan, así que sobreviven tal cual.
     upstream.pathname = reescribirPrefijoV1(upstream.pathname);
-    const proxied = new Request(upstream.toString(), request);
+    // ── Por qué en DOS pasos y no con un init completo ──
+    //
+    // La forma obvia —`new Request(url, { method, headers, body: request.body })`—
+    // lanza `duplex option is required when sending a body` en undici (que es
+    // donde corren las pruebas) aunque el runtime de Workers no lo pida.
+    // Depender de esa diferencia entre entornos es tener una prueba que no
+    // ejerce lo que se despliega.
+    //
+    // Con dos pasos, el cuerpo viaja como el de OTRA Request y no como un
+    // flujo suelto, así que ningún runtime pide `duplex`: el primero clona la
+    // petición hacia el destino nuevo (método, cuerpo y todo lo demás), y el
+    // segundo solo sustituye las cabeceras.
+    const haciaSupabase = new Request(upstream.toString(), request);
+    const proxied = new Request(haciaSupabase, {
+      headers: cabecerasHaciaSupabase(request, env, clientIp),
+    });
     return fetch(proxied);
   },
 };

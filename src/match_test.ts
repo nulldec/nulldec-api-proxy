@@ -26,6 +26,7 @@ import worker, {
   normalizarParaLimite,
   reescribirPrefijoV1,
   tieneTechoPorDefecto,
+  cabecerasHaciaSupabase,
   type Env,
   type LimiteRuta,
 } from "./index";
@@ -775,5 +776,135 @@ describe("los cubos de enrolamiento de agente y prueba de canales", () => {
     // al listado genérico `/v1/keys/agent`.
     expect(matchRestrictedPath("GET", "/v1/keys/siem")?.bucket).toBe("manage-siem-keys");
     expect(matchRestrictedPath("GET", "/v1/keys/agent")).toBeUndefined();
+  });
+});
+
+/**
+ * La IP real hacia Supabase (deuda técnica §5.46).
+ *
+ * `cf-connecting-ip` no sobrevive al salto a Supabase: su Cloudflare la
+ * sobrescribe con el par de conexión, que en este camino es este Worker. Las
+ * Edge Functions veían siempre un rango de Cloudflare, así que sus límites de
+ * tasa —que se creen por cliente— eran GLOBALES.
+ *
+ * Lo que se prueba aquí es sobre todo lo que NO puede pasar: que la cabecera
+ * salga sin secreto, o que sobreviva la que mandó quien llama. Cualquiera de
+ * las dos convierte todos los límites en decorativos, porque bastaría con
+ * mandar una IP distinta en cada petición para tener un cubo nuevo cada vez.
+ */
+describe("la IP real hacia Supabase", () => {
+  const CON_SECRETO: Env = {
+    SUPABASE_HOST: "example.supabase.co",
+    SUPABASE_ANON_KEY: "anon-key",
+    PROXY_SHARED_SECRET: "secreto-del-borde",
+  };
+  const SIN_SECRETO: Env = { SUPABASE_HOST: "example.supabase.co", SUPABASE_ANON_KEY: "anon-key" };
+
+  const peticion = (cabeceras: Record<string, string>) =>
+    new Request("https://api.nulldec.com/v1/sso/resolver", {
+      method: "POST",
+      headers: { "content-type": "application/json", ...cabeceras },
+      body: JSON.stringify({ email: "sonda@example.com" }),
+    });
+
+  it("con secreto, manda x-real-ip y x-nd-proxy", () => {
+    const h = cabecerasHaciaSupabase(peticion({ "cf-connecting-ip": "203.0.113.9" }), CON_SECRETO, "203.0.113.9");
+    expect(h.get("x-real-ip")).toBe("203.0.113.9");
+    expect(h.get("x-nd-proxy")).toBe("secreto-del-borde");
+  });
+
+  it("SIN secreto configurado, no manda ninguna de las dos", () => {
+    // Es lo que permite desplegar backend primero y Worker después: la Edge
+    // Function no recibe nada que creerse y cae a `cf-connecting-ip`, el
+    // comportamiento de antes.
+    const h = cabecerasHaciaSupabase(peticion({ "cf-connecting-ip": "203.0.113.9" }), SIN_SECRETO, "203.0.113.9");
+    expect(h.get("x-real-ip")).toBeNull();
+    expect(h.get("x-nd-proxy")).toBeNull();
+  });
+
+  it("EL CASO QUE IMPORTA: las cabeceras que mandó quien llama se BORRAN", () => {
+    // Sin este borrado, quien llama a api.nulldec.com con su propio par
+    // `x-nd-proxy` + `x-real-ip` lo tendría intacto al otro lado si el Worker
+    // no tiene secreto — y con el secreto acertado, elegiría su cubo de
+    // límite en cada petición.
+    const h = cabecerasHaciaSupabase(
+      peticion({ "cf-connecting-ip": "203.0.113.9", "x-real-ip": "1.2.3.4", "x-nd-proxy": "inventado" }),
+      SIN_SECRETO,
+      "203.0.113.9",
+    );
+    expect(h.get("x-real-ip")).toBeNull();
+    expect(h.get("x-nd-proxy")).toBeNull();
+  });
+
+  it("con secreto, la x-real-ip de quien llama se SUSTITUYE por la de verdad", () => {
+    const h = cabecerasHaciaSupabase(
+      peticion({ "cf-connecting-ip": "203.0.113.9", "x-real-ip": "1.2.3.4" }),
+      CON_SECRETO,
+      "203.0.113.9",
+    );
+    expect(h.get("x-real-ip")).toBe("203.0.113.9");
+  });
+
+  it("sin IP de cliente conocida no se afirma ninguna", () => {
+    // `clientIp` vale "unknown" cuando `cf-connecting-ip` no llega, y mandar
+    // eso como IP real crearía un cubo llamado `unknown` que parecería una
+    // dirección. Mejor que la Edge Function caiga a su propia lectura.
+    const h = cabecerasHaciaSupabase(peticion({}), CON_SECRETO, "unknown");
+    expect(h.get("x-real-ip")).toBeNull();
+    expect(h.get("x-nd-proxy")).toBeNull();
+  });
+
+  it("el resto de cabeceras sobrevive al reenvío", () => {
+    const h = cabecerasHaciaSupabase(
+      peticion({ "cf-connecting-ip": "203.0.113.9", authorization: "Bearer x", apikey: "k" }),
+      CON_SECRETO,
+      "203.0.113.9",
+    );
+    expect(h.get("authorization")).toBe("Bearer x");
+    expect(h.get("apikey")).toBe("k");
+    expect(h.get("content-type")).toBe("application/json");
+  });
+
+  it("de punta a punta: la petición reenviada a Supabase lleva la IP real", async () => {
+    const llamadas: Request[] = [];
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = typeof input === "string" ? input : input instanceof Request ? input.url : input.toString();
+      if (url.includes("/rest/v1/rpc/rate_limit_check")) return new Response("true", { status: 200 });
+      if (input instanceof Request) llamadas.push(input);
+      return new Response("ok", { status: 200 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    try {
+      await worker.fetch(peticion({ "cf-connecting-ip": "203.0.113.9" }), CON_SECRETO);
+      const reenviada = llamadas[0];
+      expect(reenviada).toBeDefined();
+      expect(reenviada.url).toContain("example.supabase.co");
+      expect(reenviada.headers.get("x-real-ip")).toBe("203.0.113.9");
+      expect(reenviada.headers.get("x-nd-proxy")).toBe("secreto-del-borde");
+      // Y el cuerpo sigue ahí: el cambio de forma del `new Request` no puede
+      // haberse comido el POST.
+      expect(await reenviada.text()).toContain("sonda@example.com");
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("un GET se reenvía sin cuerpo y no lanza", async () => {
+    // `body` en un GET lanza en el constructor de Request, así que la rama
+    // que lo excluye es funcional y no cosmética.
+    const fetchMock = vi.fn(async () => new Response("ok", { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+    try {
+      const res = await worker.fetch(
+        new Request("https://api.nulldec.com/rest/v1/decoys", {
+          method: "GET",
+          headers: { "cf-connecting-ip": "203.0.113.9" },
+        }),
+        CON_SECRETO,
+      );
+      expect(res.status).toBe(200);
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 });
