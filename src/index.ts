@@ -22,7 +22,7 @@ export interface Env {
   SUPABASE_ANON_KEY: string;
   /**
    * Secreto compartido con las Edge Functions, que autoriza la cabecera
-   * `x-real-ip` que este Worker inyecta. Ver `cabecerasHaciaSupabase`.
+   * `x-nd-real-ip` que este Worker inyecta. Ver `cabecerasHaciaSupabase`.
    *
    * Se pone con `npx wrangler secret put PROXY_SHARED_SECRET`, nunca en
    * `wrangler.toml` ni en git: quien lo tenga puede decidir en qué cubo de
@@ -446,24 +446,41 @@ function jsonResponse(body: unknown, status: number, extraHeaders: Record<string
  * cerrar. El secreto es lo que distingue «esta IP la puso el borde» de «esta
  * IP la puso quien llama».
  *
- * ── Por qué `x-real-ip` y no `x-forwarded-for` ──
+ * ── Por qué `x-nd-real-ip` y no `x-real-ip` ni `x-forwarded-for` ──
  *
- * `x-forwarded-for` es una lista de saltos y el Cloudflare de Supabase le
- * añade el suyo, así que el lado del que hay que leer depende de por dónde
- * entró la petición. `x-real-ip` es un solo valor y lo escribimos nosotros
- * enteros: no hay nada que interpretar al otro lado.
+ * La primera versión usaba `x-real-ip`, y NO FUNCIONÓ. Medido en producción el
+ * 2026-09-08: el Worker escribía la IP del cliente y la Edge Function recibía
+ * `2a06:98c0:3600::103` —el propio Worker—, exactamente el valor que ya traía
+ * `cf-connecting-ip`. `x-real-ip` es una cabecera GESTIONADA por el borde de
+ * Supabase, que la reescribe con el par de conexión igual que hace con
+ * `cf-connecting-ip`. Se ve en sus propios registros de borde: `x_real_ip` es
+ * uno de los pocos campos de cabecera que anotan, junto a `cf_connecting_ip`,
+ * y los dos valían lo mismo.
+ *
+ * De ahí el prefijo `x-nd-`: es el que ya usan las cabeceras propias del
+ * proyecto que SÍ llegan (`x-ingest-secret`, `x-network-shared-secret`,
+ * `x-api-key`), y nadie por el camino tiene opinión sobre ellas.
+ *
+ * `x-forwarded-for` se descarta por otro motivo, y sigue descartada: es una
+ * lista de saltos a la que el Cloudflare de Supabase añade el suyo, así que el
+ * extremo del que hay que leer depende de por dónde entró la petición.
  */
 export function cabecerasHaciaSupabase(request: Request, env: Env, clientIp: string): Headers {
   const cabeceras = new Headers(request.headers);
-  // Se BORRAN las dos primero, siempre. Sin esto, quien llame a
-  // `api.nulldec.com` con su propio `x-nd-proxy` y su propio `x-real-ip`
-  // tendría el par completo intacto si el Worker no tiene secreto
-  // configurado — y con el secreto correcto adivinado, elegiría su cubo. Se
-  // limpian y solo las repone este Worker.
-  cabeceras.delete("x-real-ip");
+  // Se BORRAN primero, siempre. Sin esto, quien llame a `api.nulldec.com` con
+  // su propio `x-nd-proxy` y su propia `x-nd-real-ip` tendría el par completo
+  // intacto si el Worker no tiene secreto configurado — y con el secreto
+  // correcto adivinado, elegiría su cubo. Se limpian y solo las repone este
+  // Worker.
+  //
+  // `x-real-ip` se borra también, aunque ya no se use: la reescribe el borde de
+  // Supabase de todas formas, y dejar pasar un valor de quien llama en una
+  // cabecera con ese nombre solo invita a que alguien vuelva a fiarse de ella.
+  cabeceras.delete("x-nd-real-ip");
   cabeceras.delete("x-nd-proxy");
+  cabeceras.delete("x-real-ip");
   if (env.PROXY_SHARED_SECRET && clientIp !== "unknown") {
-    cabeceras.set("x-real-ip", clientIp);
+    cabeceras.set("x-nd-real-ip", clientIp);
     cabeceras.set("x-nd-proxy", env.PROXY_SHARED_SECRET);
   }
   return cabeceras;
