@@ -807,9 +807,9 @@ describe("la IP real hacia Supabase", () => {
       body: JSON.stringify({ email: "sonda@example.com" }),
     });
 
-  it("con secreto, manda x-real-ip y x-nd-proxy", () => {
+  it("con secreto, manda x-nd-real-ip y x-nd-proxy", () => {
     const h = cabecerasHaciaSupabase(peticion({ "cf-connecting-ip": "203.0.113.9" }), CON_SECRETO, "203.0.113.9");
-    expect(h.get("x-real-ip")).toBe("203.0.113.9");
+    expect(h.get("x-nd-real-ip")).toBe("203.0.113.9");
     expect(h.get("x-nd-proxy")).toBe("secreto-del-borde");
   });
 
@@ -818,8 +818,17 @@ describe("la IP real hacia Supabase", () => {
     // Function no recibe nada que creerse y cae a `cf-connecting-ip`, el
     // comportamiento de antes.
     const h = cabecerasHaciaSupabase(peticion({ "cf-connecting-ip": "203.0.113.9" }), SIN_SECRETO, "203.0.113.9");
-    expect(h.get("x-real-ip")).toBeNull();
+    expect(h.get("x-nd-real-ip")).toBeNull();
     expect(h.get("x-nd-proxy")).toBeNull();
+  });
+
+  it("x-real-ip NO se usa: la reescribe el borde de Supabase", () => {
+    // Medido el 2026-09-08: con `x-real-ip`, la Edge Function recibía la IP del
+    // propio Worker. Es una cabecera gestionada por el borde de Supabase, que
+    // la reescribe con el par de conexión igual que `cf-connecting-ip`.
+    const h = cabecerasHaciaSupabase(peticion({ "cf-connecting-ip": "203.0.113.9" }), CON_SECRETO, "203.0.113.9");
+    expect(h.get("x-real-ip")).toBeNull();
+    expect(h.get("x-nd-real-ip")).toBe("203.0.113.9");
   });
 
   it("EL CASO QUE IMPORTA: las cabeceras que mandó quien llama se BORRAN", () => {
@@ -828,21 +837,21 @@ describe("la IP real hacia Supabase", () => {
     // no tiene secreto — y con el secreto acertado, elegiría su cubo de
     // límite en cada petición.
     const h = cabecerasHaciaSupabase(
-      peticion({ "cf-connecting-ip": "203.0.113.9", "x-real-ip": "1.2.3.4", "x-nd-proxy": "inventado" }),
+      peticion({ "cf-connecting-ip": "203.0.113.9", "x-nd-real-ip": "1.2.3.4", "x-real-ip": "9.9.9.9", "x-nd-proxy": "inventado" }),
       SIN_SECRETO,
       "203.0.113.9",
     );
-    expect(h.get("x-real-ip")).toBeNull();
+    expect(h.get("x-nd-real-ip")).toBeNull();
     expect(h.get("x-nd-proxy")).toBeNull();
   });
 
-  it("con secreto, la x-real-ip de quien llama se SUSTITUYE por la de verdad", () => {
+  it("con secreto, la x-nd-real-ip de quien llama se SUSTITUYE por la de verdad", () => {
     const h = cabecerasHaciaSupabase(
-      peticion({ "cf-connecting-ip": "203.0.113.9", "x-real-ip": "1.2.3.4" }),
+      peticion({ "cf-connecting-ip": "203.0.113.9", "x-nd-real-ip": "1.2.3.4" }),
       CON_SECRETO,
       "203.0.113.9",
     );
-    expect(h.get("x-real-ip")).toBe("203.0.113.9");
+    expect(h.get("x-nd-real-ip")).toBe("203.0.113.9");
   });
 
   it("sin IP de cliente conocida no se afirma ninguna", () => {
@@ -850,7 +859,7 @@ describe("la IP real hacia Supabase", () => {
     // eso como IP real crearía un cubo llamado `unknown` que parecería una
     // dirección. Mejor que la Edge Function caiga a su propia lectura.
     const h = cabecerasHaciaSupabase(peticion({}), CON_SECRETO, "unknown");
-    expect(h.get("x-real-ip")).toBeNull();
+    expect(h.get("x-nd-real-ip")).toBeNull();
     expect(h.get("x-nd-proxy")).toBeNull();
   });
 
@@ -879,7 +888,7 @@ describe("la IP real hacia Supabase", () => {
       const reenviada = llamadas[0];
       expect(reenviada).toBeDefined();
       expect(reenviada.url).toContain("example.supabase.co");
-      expect(reenviada.headers.get("x-real-ip")).toBe("203.0.113.9");
+      expect(reenviada.headers.get("x-nd-real-ip")).toBe("203.0.113.9");
       expect(reenviada.headers.get("x-nd-proxy")).toBe("secreto-del-borde");
       // Y el cuerpo sigue ahí: el cambio de forma del `new Request` no puede
       // haberse comido el POST.
