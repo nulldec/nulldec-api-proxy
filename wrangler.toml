@@ -67,7 +67,22 @@ SUPABASE_HOST = "dtarsxovqdtjtdxzdzzy.supabase.co"
 # Eso no da un error de despliegue: da una API que responde 401 a todo, que es
 # la clase de fallo que cuesta horas de diagnosticar porque nada falló donde
 # se miraba. Con esta línea, deja de poder ocurrir en silencio.
-required = ["SUPABASE_ANON_KEY"]
+#
+# `PROXY_SHARED_SECRET` entra aquí por el MISMO argumento, y conviene decirlo
+# porque su ausencia falla incluso más callada. Es lo que autoriza la
+# `x-real-ip` que este Worker inyecta para que los límites de tasa del backend
+# cuenten por cliente y no globalmente (deuda técnica §5.46). Sin él, el Worker
+# no manda la cabecera, el backend cae a `cf-connecting-ip` —que en ese camino
+# es la IP del propio Worker— y los tres límites vuelven a ser globales sin que
+# nada falle: la API responde, las rutas funcionan, y lo único que pasa es que
+# desde una máquina cualquiera se deja sin login SSO a todos los clientes.
+#
+# El código lo trata como OPCIONAL a propósito (`PROXY_SHARED_SECRET?: string`)
+# y eso NO se contradice con exigirlo aquí: el tipo opcional es la defensa en
+# ejecución —si falta, se degrada a lo de antes en vez de reventar— y esta
+# línea es la que impide que falte. Y de paso convierte el orden de despliegue
+# en algo que el propio wrangler exige: primero el secreto, después el Worker.
+required = ["SUPABASE_ANON_KEY", "PROXY_SHARED_SECRET"]
 
 [observability]
 # Encendida en el Worker desplegado, y se declara para no apagarla sin
