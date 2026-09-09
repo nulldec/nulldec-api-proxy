@@ -1,5 +1,25 @@
 # nulldec-api-proxy
 
+> ## ⛔ NO DESPLIEGUES `main` HASTA QUE `proxy_shared_secret` ESTÉ EN VAULT
+>
+> La rama `revision/hallazgos` cambia el límite de tasa del borde a
+> `rate_limit_check_borde`, que **falla en cerrado** si el secreto no está en
+> Vault. Desplegarla antes deja `api.nulldec.com` devolviendo **429 a todo**.
+>
+> El secreto vive en TRES sitios y los tres tienen que llevar el mismo valor:
+>
+> | Dónde | Cómo se pone | Quién lo lee |
+> |---|---|---|
+> | Worker | `npx wrangler secret put PROXY_SHARED_SECRET` | lo manda como `x-nd-proxy` y como `p_secret` |
+> | Edge Functions | secreto del proyecto Supabase | valida `x-nd-proxy` (`_shared/rate-limit.ts`) |
+> | **Vault** | `select vault.create_secret(...)` | valida `p_secret` (`private.secreto_del_borde()`) |
+>
+> Los dos primeros están puestos desde el 2026-09-08. **El de Vault falta**, y
+> es el que la documentación no pedía porque no existía.
+>
+> Orden: Vault → `wrangler deploy` → migración `20260909092000` del backend.
+> Detalle en `nulldec-context/deuda_tecnica.md` §5.47.
+
 ## De dónde sale este repositorio
 
 Este Worker de Cloudflare **es** `api.nulldec.com`: todo el tráfico de la API pasa
