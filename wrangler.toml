@@ -29,6 +29,25 @@ compatibility_flags = []
 # Custom Domain, no Route. Declararlo aquí es idempotente (ya existe y apunta
 # a este mismo Worker), y evita que un despliegue futuro desde un clon limpio
 # de este repo se quede sin disparador.
+#
+# ⚠ AL MIGRAR AL RELÉ DE HETZNER, ESTA LISTA CAMBIA — Y SI NO SE CAMBIA, EL
+#   RELÉ SE CAE SOLO ALGÚN DÍA.
+#
+# El relé necesita que `api.nulldec.com` sea un registro A **gris** apuntando
+# al balanceador de Hetzner. Pero un Custom Domain de Workers es un registro
+# DNS que gestiona Cloudflare: mientras `api.nulldec.com` siga declarado aquí,
+# cualquier `wrangler deploy` vuelve a reclamarlo como Custom Domain, pisa el
+# registro A y deja al relé hablando consigo mismo. Nadie habrá tocado nada y
+# todo el tráfico español se habrá caído.
+#
+# En el paso 5 de `MIGRACION_CLOUDFLARE/APLICAR.md` se sustituye por:
+#
+#   routes = [
+#     { pattern = "api-cf.nulldec.com", custom_domain = true }
+#   ]
+#
+# No se deja ya cambiado porque hoy `api-cf.nulldec.com` no existe y el
+# despliegue fallaría.
 routes = [
   { pattern = "api.nulldec.com", custom_domain = true }
 ]
@@ -56,6 +75,20 @@ SUPABASE_HOST = "dtarsxovqdtjtdxzdzzy.supabase.co"
 # despliegue, así que no hace falta repetirlo — y ponerlo en este fichero lo
 # metería en git, que es justo lo que un secreto no debe hacer. Se gestiona
 # con `npx wrangler secret put SUPABASE_ANON_KEY`.
+
+# RELAY_SECRET (el secreto del relé de Hetzner, ver src/rele.ts) es también un
+# secreto y por lo mismo NO se declara aquí con su valor. Tampoco entra en
+# `required` de momento: mientras no exista el relé, el Worker funciona
+# exactamente igual sin él, y marcarlo como requerido haría fallar cualquier
+# despliegue de hoy. Se añade a `required` en el paso 5 de la migración, una
+# vez puesto con:
+#
+#   npx wrangler secret put RELAY_SECRET
+#
+# Ese orden importa: el secreto se pone ANTES de mover el DNS. Si el DNS se
+# mueve primero, el Worker recibe la cabecera del relé, no puede validarla y
+# mete a TODO el tráfico en el cubo `rl:<bucket>:<ip del VPS>` — un solo
+# cliente agotaría el límite de todos los demás.
 
 [secrets]
 # Declarar el secreto como REQUERIDO sin exponer su valor. Wrangler comprueba

@@ -17,6 +17,8 @@
  * igual que antes de esta tarea.
  */
 
+import { limpiarCabecerasDeRele, registrarDiagnostico, resolverIpDelCliente } from "./rele.ts";
+
 export interface Env {
   SUPABASE_HOST: string;
   SUPABASE_ANON_KEY: string;
@@ -34,6 +36,27 @@ export interface Env {
    * después sin ninguna ventana rara, que es el orden que pide el arreglo.
    */
   PROXY_SHARED_SECRET?: string;
+  /**
+   * Secreto compartido con el relé de Hetzner (ver `rele.ts`). OPCIONAL: sin
+   * él este Worker se comporta exactamente como antes de que el relé
+   * existiera — el estado previo a la migración y el posterior a desmontarla.
+   *
+   * ── Por qué NO es el mismo que `PROXY_SHARED_SECRET` ──
+   *
+   * Son dos tramos distintos de la misma cadena, y cada uno tiene su frontera
+   * de confianza:
+   *
+   *     usuario → [nginx en Hetzner] → [este Worker] → [Edge Function]
+   *                   RELAY_SECRET        PROXY_SHARED_SECRET
+   *
+   * `RELAY_SECRET` vive en dos VPS de Hetzner que terminan TLS.
+   * `PROXY_SHARED_SECRET` no sale de este Worker y de Supabase. Unificarlos
+   * significaría que un VPS comprometido podría firmar `x-nd-real-ip`
+   * directamente contra Supabase SALTÁNDOSE este Worker — y con ello elegir
+   * el cubo de límite de cualquiera. Separados, el compromiso de un VPS llega
+   * hasta aquí y no más lejos.
+   */
+  RELAY_SECRET?: string;
 }
 
 export interface LimiteRuta {
@@ -496,6 +519,17 @@ export function cabecerasHaciaSupabase(request: Request, env: Env, clientIp: str
   cabeceras.delete("x-nd-real-ip");
   cabeceras.delete("x-nd-proxy");
   cabeceras.delete("x-real-ip");
+  // Y las del OTRO tramo, el de Hetzner → aquí. No son de Supabase y no
+  // tienen nada que hacer río abajo:
+  //
+  //   - Si validaron, la IP ya está en `clientIp` y se repone firmada abajo
+  //     con el secreto de ESTE tramo. El secreto del relé no tiene por qué
+  //     cruzar un sistema que no lo usa, ni aparecer en ningún volcado de
+  //     cabeceras que alguien añada ahí en el futuro.
+  //   - Si NO validaron, son cabeceras que inyectó quien llama, y
+  //     propagarlas es exactamente cómo un dato falsificado acaba pareciendo
+  //     legítimo en el siguiente salto.
+  limpiarCabecerasDeRele(cabeceras);
   if (env.PROXY_SHARED_SECRET && clientIp !== "unknown") {
     cabeceras.set("x-nd-real-ip", clientIp);
     cabeceras.set("x-nd-proxy", env.PROXY_SHARED_SECRET);
@@ -506,7 +540,24 @@ export function cabecerasHaciaSupabase(request: Request, env: Env, clientIp: str
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
-    const clientIp = request.headers.get("cf-connecting-ip") ?? "unknown";
+    // La IP que decide el cubo del límite de tasa. Con el relé de Hetzner
+    // delante, `cf-connecting-ip` es la del VPS y no la del cliente: sin esta
+    // resolución, TODO el tráfico del mundo compartiría el cubo
+    // `rl:<bucket>:<ip del VPS>` y el primero que gastara 3 peticiones de
+    // `list-network-identifiers` dejaría fuera a los demás durante un minuto.
+    // Ver `rele.ts` — y en particular por qué la cabecera NO se cree sin el
+    // secreto.
+    //
+    // El `?? "unknown"` de siempre se conserva: es preferible un cubo
+    // compartido por las peticiones sin IP a no aplicar límite ninguno.
+    const resolucion = resolverIpDelCliente(request, env);
+    // El estado intermedio —relé montado pero el Worker sin poder validar su
+    // cabecera— NO se manifiesta de ninguna otra forma: todo sigue
+    // respondiendo 200 mientras la IP del cliente se pierde y los límites de
+    // tasa se comparten. Esta línea es la única que lo delata. Silencia sus
+    // propias repeticiones, así que no puede inundar el registro.
+    registrarDiagnostico(resolucion, request);
+    const clientIp = resolucion.ip ?? "unknown";
 
     if (request.method !== "OPTIONS") {
       // Barras colapsadas SOLO para decidir — ver `normalizarParaLimite`. La
