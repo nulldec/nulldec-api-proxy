@@ -316,7 +316,8 @@ const AVISOS: Record<string, string> = {
     "llega la cabecera del relé pero este Worker NO tiene RELAY_SECRET. " +
     "La IP del cliente se está PERDIENDO: todo el tráfico comparte el cubo " +
     "de límite de tasa y source_ip es la IP del VPS. " +
-    "Arréglalo con `wrangler secret put RELAY_SECRET` (paso 5 de relay/MIGRACION.md).",
+    "Arréglalo con `wrangler secret put RELAY_SECRET` " +
+    "(paso 5 de MIGRACION_CLOUDFLARE/APLICAR.md).",
   "secreto-invalido":
     "la cabecera del relé llega con un secreto que NO coincide. " +
     "La IP del cliente se está PERDIENDO. El secreto de los VPS y el del " +
