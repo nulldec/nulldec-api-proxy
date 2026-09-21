@@ -362,14 +362,31 @@ async function checkAndIncrement(
   windowSeconds: number,
 ): Promise<boolean> {
   try {
-    const res = await fetch(`https://${env.SUPABASE_HOST}/rest/v1/rpc/rate_limit_check`, {
+    // ── `rate_limit_check_borde`, no `rate_limit_check` ──
+    //
+    // La de tres argumentos tenía `execute` para `anon`, y como quien llama
+    // elige la clave del cubo, cualquiera con la clave anónima —que va en el
+    // bundle del navegador— podía agotar el cubo de una IP ajena y dejarla sin
+    // servicio en toda la API. Comprobado contra producción el 2026-09-08 con
+    // una clave inventada: `true`, `true`, `false`.
+    //
+    // La versión del borde exige el secreto compartido que este Worker ya
+    // tiene, y a la de antes se le retiró el `execute` de `anon`. No se usó una
+    // clave de servicio a propósito: se salta la RLS de todas las tablas, y un
+    // arreglo no debería ampliar lo que este componente puede hacer.
+    const res = await fetch(`https://${env.SUPABASE_HOST}/rest/v1/rpc/rate_limit_check_borde`, {
       method: "POST",
       headers: {
         "content-type": "application/json",
         apikey: env.SUPABASE_ANON_KEY,
         authorization: `Bearer ${env.SUPABASE_ANON_KEY}`,
       },
-      body: JSON.stringify({ p_key: key, p_limit: limit, p_window_seconds: windowSeconds }),
+      body: JSON.stringify({
+        p_key: key,
+        p_limit: limit,
+        p_window_seconds: windowSeconds,
+        p_secret: env.PROXY_SHARED_SECRET ?? "",
+      }),
     });
     if (!res.ok) {
       // Falla en abierto a propósito: la autenticación real de estas rutas

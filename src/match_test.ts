@@ -310,13 +310,13 @@ describe("techo por defecto para rutas no listadas", () => {
 
   const llamadasAlLimite = () =>
     fetchMock.mock.calls.filter(([input]) =>
-      urlDeEntrada(input).includes("/rest/v1/rpc/rate_limit_check"),
+      urlDeEntrada(input).includes("/rest/v1/rpc/rate_limit_check_borde"),
     );
 
   beforeEach(() => {
     fetchMock = vi.fn(async (input: RequestInfo | URL) => {
       const url = urlDeEntrada(input);
-      if (url.includes("/rest/v1/rpc/rate_limit_check")) {
+      if (url.includes("/rest/v1/rpc/rate_limit_check_borde")) {
         return new Response(JSON.stringify(true), { status: 200 });
       }
       // Respuesta genérica para la petición reenviada a Supabase.
@@ -448,7 +448,7 @@ describe("techo por defecto para rutas no listadas", () => {
     const reenviada = fetchMock.mock.calls.find(
       ([input]) =>
         urlDeEntrada(input).includes("example.supabase.co") &&
-        !urlDeEntrada(input).includes("rate_limit_check"),
+        !urlDeEntrada(input).includes("rate_limit_check_borde"),
     );
     expect(reenviada).toBeDefined();
     const [entrada] = reenviada as [RequestInfo];
@@ -514,7 +514,7 @@ describe("comportamiento de checkAndIncrement ante fallo y ante límite alcanzad
   it("si la RPC devuelve 500, la petición SE DEJA PASAR (falla en abierto), no se corta", async () => {
     callarError();
     const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
-      if (urlDeEntrada(input).includes("/rest/v1/rpc/rate_limit_check")) {
+      if (urlDeEntrada(input).includes("/rest/v1/rpc/rate_limit_check_borde")) {
         return new Response("boom", { status: 500 });
       }
       return new Response("ok-upstream", { status: 200 });
@@ -534,7 +534,7 @@ describe("comportamiento de checkAndIncrement ante fallo y ante límite alcanzad
     const reenviada = fetchMock.mock.calls.find(
       ([input]) =>
         urlDeEntrada(input).includes("example.supabase.co") &&
-        !urlDeEntrada(input).includes("rate_limit_check"),
+        !urlDeEntrada(input).includes("rate_limit_check_borde"),
     );
     expect(reenviada, "la petición debe llegar a upstream pese al fallo del límite").toBeDefined();
   });
@@ -542,7 +542,7 @@ describe("comportamiento de checkAndIncrement ante fallo y ante límite alcanzad
   it("si la RPC lanza (fallo de red), la petición también se deja pasar", async () => {
     callarError();
     const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
-      if (urlDeEntrada(input).includes("/rest/v1/rpc/rate_limit_check")) {
+      if (urlDeEntrada(input).includes("/rest/v1/rpc/rate_limit_check_borde")) {
         throw new TypeError("network error");
       }
       return new Response("ok-upstream", { status: 200 });
@@ -563,7 +563,7 @@ describe("comportamiento de checkAndIncrement ante fallo y ante límite alcanzad
 
   it("si la RPC devuelve false, responde 429 con retry-after y la cabecera expuesta a CORS", async () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
-      if (urlDeEntrada(input).includes("/rest/v1/rpc/rate_limit_check")) {
+      if (urlDeEntrada(input).includes("/rest/v1/rpc/rate_limit_check_borde")) {
         return new Response(JSON.stringify(false), { status: 200 });
       }
       return new Response("ok-upstream", { status: 200 });
@@ -587,7 +587,7 @@ describe("comportamiento de checkAndIncrement ante fallo y ante límite alcanzad
     const reenviada = fetchMock.mock.calls.find(
       ([input]) =>
         urlDeEntrada(input).includes("example.supabase.co") &&
-        !urlDeEntrada(input).includes("rate_limit_check"),
+        !urlDeEntrada(input).includes("rate_limit_check_borde"),
     );
     expect(reenviada).toBeUndefined();
   });
@@ -658,7 +658,7 @@ describe("la reescritura se aplica al reenviar (integración con worker.fetch)",
   beforeEach(() => {
     fetchMock = vi.fn(async (input: RequestInfo | URL) => {
       const url = urlDe(input);
-      if (url.includes("/rest/v1/rpc/rate_limit_check")) {
+      if (url.includes("/rest/v1/rpc/rate_limit_check_borde")) {
         return new Response(JSON.stringify(true), { status: 200 });
       }
       return new Response("ok", { status: 200 });
@@ -679,7 +679,7 @@ describe("la reescritura se aplica al reenviar (integración con worker.fetch)",
     await worker.fetch(request, env);
 
     const proxiedCall = fetchMock.mock.calls.find(
-      ([input]) => urlDe(input).includes("example.supabase.co") && !urlDe(input).includes("rate_limit_check"),
+      ([input]) => urlDe(input).includes("example.supabase.co") && !urlDe(input).includes("rate_limit_check_borde"),
     );
     expect(proxiedCall).toBeDefined();
     const [proxiedInput] = proxiedCall as [RequestInfo];
@@ -695,7 +695,7 @@ describe("la reescritura se aplica al reenviar (integración con worker.fetch)",
     await worker.fetch(request, env);
 
     const proxiedCall = fetchMock.mock.calls.find(
-      ([input]) => urlDe(input).includes("example.supabase.co") && !urlDe(input).includes("rate_limit_check"),
+      ([input]) => urlDe(input).includes("example.supabase.co") && !urlDe(input).includes("rate_limit_check_borde"),
     );
     expect(proxiedCall).toBeDefined();
     const [proxiedInput] = proxiedCall as [RequestInfo];
@@ -878,7 +878,7 @@ describe("la IP real hacia Supabase", () => {
     const llamadas: Request[] = [];
     const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
       const url = typeof input === "string" ? input : input instanceof Request ? input.url : input.toString();
-      if (url.includes("/rest/v1/rpc/rate_limit_check")) return new Response("true", { status: 200 });
+      if (url.includes("/rest/v1/rpc/rate_limit_check_borde")) return new Response("true", { status: 200 });
       if (input instanceof Request) llamadas.push(input);
       return new Response("ok", { status: 200 });
     });
@@ -915,5 +915,63 @@ describe("la IP real hacia Supabase", () => {
     } finally {
       vi.unstubAllGlobals();
     }
+  });
+});
+
+describe("el límite del borde va por la función que exige secreto", () => {
+  // La de tres argumentos tenía `execute` para `anon`, y quien llama elige la
+  // clave del cubo: cualquiera con la clave anónima —que es pública— podía
+  // agotar el cubo de una IP ajena. Comprobado contra producción.
+  const env: Env = {
+    SUPABASE_HOST: "example.supabase.co",
+    SUPABASE_ANON_KEY: "anon-key",
+    PROXY_SHARED_SECRET: "secreto-del-borde",
+  };
+
+  it("llama a rate_limit_check_borde y le manda el secreto", async () => {
+    const llamadas: [string, RequestInit][] = [];
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === "string" ? input : input instanceof Request ? input.url : input.toString();
+      if (url.includes("/rpc/")) { llamadas.push([url, init!]); return new Response("true", { status: 200 }); }
+      return new Response("ok", { status: 200 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    try {
+      await worker.fetch(
+        new Request("https://api.nulldec.com/v1/sso/resolver", {
+          method: "POST", headers: { "cf-connecting-ip": "203.0.113.9" }, body: "{}",
+        }),
+        env,
+      );
+      const [url, init] = llamadas[0];
+      expect(url).toContain("/rpc/rate_limit_check_borde");
+      // Y NO la de antes: si vuelve a llamarse, el agujero vuelve.
+      expect(url.endsWith("/rpc/rate_limit_check")).toBe(false);
+      expect(JSON.parse(init.body as string).p_secret).toBe("secreto-del-borde");
+    } finally { vi.unstubAllGlobals(); }
+  });
+
+  it("sin secreto configurado manda cadena vacía, y la base rechaza", async () => {
+    // Falla en CERRADO, al contrario que el resto del límite: `p_secret` vacío
+    // hace que la función devuelva `false` y quien llama ve un 429 al
+    // instante. Un paso de despliegue olvidado tiene que doler enseguida, no
+    // apagar el límite en silencio.
+    const llamadas: RequestInit[] = [];
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === "string" ? input : input instanceof Request ? input.url : input.toString();
+      if (url.includes("/rpc/")) { llamadas.push(init!); return new Response("false", { status: 200 }); }
+      return new Response("ok", { status: 200 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    try {
+      const res = await worker.fetch(
+        new Request("https://api.nulldec.com/v1/sso/resolver", {
+          method: "POST", headers: { "cf-connecting-ip": "203.0.113.9" }, body: "{}",
+        }),
+        { SUPABASE_HOST: "example.supabase.co", SUPABASE_ANON_KEY: "anon-key" },
+      );
+      expect(JSON.parse(llamadas[0].body as string).p_secret).toBe("");
+      expect(res.status).toBe(429);
+    } finally { vi.unstubAllGlobals(); }
   });
 });
