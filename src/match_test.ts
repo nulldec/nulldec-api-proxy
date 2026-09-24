@@ -20,6 +20,9 @@ import worker, {
   DEFAULT_BUCKET,
   DEFAULT_LIMIT,
   DEFAULT_WINDOW_SECONDS,
+  PREFLIGHT_BUCKET,
+  PREFLIGHT_LIMIT,
+  PREFLIGHT_WINDOW_SECONDS,
   RESTRICTED_PATHS,
   matchRestrictedPath,
   pathMatchesPattern,
@@ -88,13 +91,29 @@ describe("matchRestrictedPath", () => {
     }
   });
 
-  it("las once entradas reales casan con CUALQUIER verbo — no relajar lo desplegado", () => {
+  it("las entradas reales casan con CUALQUIER verbo — no relajar lo desplegado", () => {
     // Antes de la fase 1 el emparejador casaba por sufijo, sin mirar el
     // método: un `GET /v1/contact-sales` entraba en el cubo de 5/hora igual
     // que un POST. Estrechar una entrada a `method: "POST"` la deja fuera de
     // su cubo estricto para el resto de verbos y la manda al techo por
     // defecto (600/60 s) — una relajación silenciosa de un control vivo.
-    for (const entrada of RESTRICTED_PATHS) {
+    //
+    // Las únicas con verbo concreto son las seis del 2026-09-24, y van en una
+    // lista ESCRITA A MANO: nacieron con `POST` (no tenían entrada antes, así
+    // que no relajan nada) y con `*` romperían sus pantallas de listado. Una
+    // entrada que se estreche sin pasar por esta lista sale en rojo.
+    const NACIDAS_CON_VERBO = [
+      "POST /v1/invitations/preview",
+      "POST /v1/invitations/accept",
+      "POST /v1/team/invitations",
+      "POST /v1/team/invitations/:id/resend",
+      "POST /v1/admin/mfa-resets",
+      "POST /v1/admin/staff",
+    ];
+    expect(
+      RESTRICTED_PATHS.filter((e) => e.method !== "*").map((e) => `${e.method} ${e.pattern}`),
+    ).toEqual(NACIDAS_CON_VERBO);
+    for (const entrada of RESTRICTED_PATHS.filter((e) => e.method === "*")) {
       for (const metodo of ["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD"]) {
         const m = matchRestrictedPath(metodo, entrada.pattern);
         expect(m, `${metodo} ${entrada.pattern} debería casar su entrada estricta`).toBeDefined();
@@ -133,7 +152,7 @@ describe("matchRestrictedPath", () => {
  * propósito y se deja escrito el porqué.
  */
 describe("instantánea de los cubos vivos", () => {
-  it("las dieciocho entradas —dieciséis cubos— son exactamente estas", () => {
+  it("las veinticuatro entradas —veinte cubos— son exactamente estas", () => {
     const instantanea = RESTRICTED_PATHS.map(({ bucket, limit, windowSeconds }) => ({
       bucket,
       limit,
@@ -197,6 +216,13 @@ describe("instantánea de los cubos vivos", () => {
       { bucket: "passkeys", limit: 120, windowSeconds: 60 },
       { bucket: "passkeys", limit: 120, windowSeconds: 60 },
       { bucket: "passkeys", limit: 120, windowSeconds: 60 },
+      // Las seis del 2026-09-24 (§2.4 de la deuda técnica), cuatro cubos.
+      { bucket: "invitations", limit: 60, windowSeconds: 300 },
+      { bucket: "invitations", limit: 60, windowSeconds: 300 },
+      { bucket: "team-invitations", limit: 60, windowSeconds: 3600 },
+      { bucket: "team-invitations", limit: 60, windowSeconds: 3600 },
+      { bucket: "admin-mfa-resets", limit: 10, windowSeconds: 3600 },
+      { bucket: "admin-staff", limit: 20, windowSeconds: 3600 },
     ]);
   });
 
@@ -590,6 +616,115 @@ describe("comportamiento de checkAndIncrement ante fallo y ante límite alcanzad
         !urlDeEntrada(input).includes("rate_limit_check_borde"),
     );
     expect(reenviada).toBeUndefined();
+  });
+});
+
+describe("los cubos que la migración a /v1/ había dejado sin declarar (2026-09-24)", () => {
+  it("cada POST cae en su cubo, también con el prefijo viejo", () => {
+    const casos: [string, string][] = [
+      ["/v1/invitations/preview", "invitations"],
+      ["/v1/invitations/accept", "invitations"],
+      ["/v1/team/invitations", "team-invitations"],
+      ["/v1/team/invitations/8f3c/resend", "team-invitations"],
+      ["/v1/admin/mfa-resets", "admin-mfa-resets"],
+      ["/v1/admin/staff", "admin-staff"],
+    ];
+    for (const [ruta, cubo] of casos) {
+      expect(matchRestrictedPath("POST", ruta)?.bucket, ruta).toBe(cubo);
+      expect(matchRestrictedPath("POST", ruta.replace("/v1/", "/functions/v1/"))?.bucket, ruta).toBe(cubo);
+    }
+  });
+
+  it("los GET de listado NO gastan el cupo de enviar correo ni de dar de alta", () => {
+    // Con `*`, recargar la pantalla de equipo o la de staff gastaría el cupo
+    // de 60 correos o de 20 altas por hora.
+    expect(matchRestrictedPath("GET", "/v1/team/invitations")).toBeUndefined();
+    expect(matchRestrictedPath("GET", "/v1/admin/staff")).toBeUndefined();
+  });
+
+  it("y no se comen rutas vecinas", () => {
+    expect(matchRestrictedPath("DELETE", "/v1/team/invitations/8f3c")).toBeUndefined();
+    expect(matchRestrictedPath("PATCH", "/v1/admin/staff/8f3c")).toBeUndefined();
+    expect(matchRestrictedPath("POST", "/v1/invitations/otra-cosa")).toBeUndefined();
+  });
+});
+
+describe("los preflight OPTIONS tienen su propio cubo (§5.7b)", () => {
+  const env: Env = { SUPABASE_HOST: "example.supabase.co", SUPABASE_ANON_KEY: "anon-key" };
+
+  function urlDeEntrada(input: RequestInfo | URL): string {
+    if (typeof input === "string") return input;
+    if (input instanceof Request) return input.url;
+    return input.toString();
+  }
+
+  afterEach(() => vi.unstubAllGlobals());
+
+  function stub(permitido: boolean) {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      if (urlDeEntrada(input).includes("/rest/v1/rpc/rate_limit_check_borde")) {
+        return new Response(JSON.stringify(permitido), { status: 200 });
+      }
+      return new Response(null, { status: 204 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    return fetchMock;
+  }
+
+  const clavesPedidas = (fetchMock: ReturnType<typeof vi.fn>) =>
+    fetchMock.mock.calls
+      .filter(([input]) => urlDeEntrada(input).includes("rate_limit_check_borde"))
+      .map(([, init]) => JSON.parse((init as RequestInit).body as string));
+
+  it("un OPTIONS a la API cuenta en rl:preflight, con su techo y NO en el por defecto", async () => {
+    const fetchMock = stub(true);
+    const res = await worker.fetch(
+      new Request("https://api.nulldec.com/v1/team/invitations", {
+        method: "OPTIONS",
+        headers: { "cf-connecting-ip": "203.0.113.9" },
+      }),
+      env,
+    );
+    expect(res.status).toBe(204);
+    const claves = clavesPedidas(fetchMock);
+    expect(claves).toHaveLength(1);
+    expect(claves[0].p_key).toBe(`rl:${PREFLIGHT_BUCKET}:203.0.113.9`);
+    expect(claves[0].p_limit).toBe(PREFLIGHT_LIMIT);
+    expect(claves[0].p_window_seconds).toBe(PREFLIGHT_WINDOW_SECONDS);
+  });
+
+  it("el techo es el doble del por defecto: el navegador manda preflight Y petición", () => {
+    expect(PREFLIGHT_LIMIT).toBe(2 * DEFAULT_LIMIT);
+    expect(PREFLIGHT_WINDOW_SECONDS).toBe(DEFAULT_WINDOW_SECONDS);
+  });
+
+  it("agotado, responde 429 con CORS legible y no llega a Supabase", async () => {
+    const fetchMock = stub(false);
+    const res = await worker.fetch(
+      new Request("https://api.nulldec.com/v1/signals/iocs", {
+        method: "OPTIONS",
+        headers: { "cf-connecting-ip": "203.0.113.9" },
+      }),
+      env,
+    );
+    expect(res.status).toBe(429);
+    expect(res.headers.get("access-control-allow-origin")).toBe("*");
+    const reenviada = fetchMock.mock.calls.find(
+      ([input]) => !urlDeEntrada(input).includes("rate_limit_check_borde"),
+    );
+    expect(reenviada).toBeUndefined();
+  });
+
+  it("fuera de la superficie de API (PostgREST, Auth) el preflight no paga límite", async () => {
+    const fetchMock = stub(true);
+    await worker.fetch(
+      new Request("https://api.nulldec.com/rest/v1/raw_signals", {
+        method: "OPTIONS",
+        headers: { "cf-connecting-ip": "203.0.113.9" },
+      }),
+      env,
+    );
+    expect(clavesPedidas(fetchMock)).toHaveLength(0);
   });
 });
 

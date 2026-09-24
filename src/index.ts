@@ -284,7 +284,51 @@ export const RESTRICTED_PATHS: LimiteRuta[] = [
   { method: "*", pattern: "/v1/passkeys", bucket: "passkeys", limit: 120, windowSeconds: 60 },
   { method: "*", pattern: "/v1/passkeys/:id", bucket: "passkeys", limit: 120, windowSeconds: 60 },
   { method: "*", pattern: "/v1/passkeys/:accion/:fase", bucket: "passkeys", limit: 120, windowSeconds: 60 },
+
+  // ── Las cinco que la migración a /v1/ dejó en el techo por defecto (2026-09-24) ──
+  //
+  // Deuda técnica §2.4, §5.16e, §5.17h y §5.19i: cada fase las anotó «va con
+  // los otros pendientes del Worker» y ninguna las declaró. Estas son las
+  // PRIMERAS entradas con un verbo concreto, y no contradicen el comentario de
+  // `method` de arriba: aquel protege entradas que ya existían (estrecharlas
+  // relajaría un control vivo); éstas no tenían ninguna, así que `POST` solo
+  // añade. Y `*` aquí sería un error: `GET /v1/team/invitations` y
+  // `GET /v1/admin/staff` LISTAN, y con un techo de correo cada recarga de la
+  // pantalla gastaría el cupo de enviar.
+  //
+  // Invitaciones — preview es pública y accept arranca la función antes del 401
+  // (`verify_jwt = false`). Un cubo para las dos, holgado por el NAT: el
+  // onboarding de un MSP mete a una oficina entera por la misma IP a la vez.
+  { method: "POST", pattern: "/v1/invitations/preview", bucket: "invitations", limit: 60, windowSeconds: 300 },
+  { method: "POST", pattern: "/v1/invitations/accept", bucket: "invitations", limit: 60, windowSeconds: 300 },
+  // Mandan correo real por Resend, como `contact-sales`. Con sesión de admin,
+  // así que más margen: invitar a un equipo entero se hace de una sentada.
+  { method: "POST", pattern: "/v1/team/invitations", bucket: "team-invitations", limit: 60, windowSeconds: 3600 },
+  { method: "POST", pattern: "/v1/team/invitations/:id/resend", bucket: "team-invitations", limit: 60, windowSeconds: 3600 },
+  // Categoría C de staff: dejar a alguien sin segundo factor y dar de alta a un
+  // empleado. Las hace la consola interna, a mano y de una en una.
+  { method: "POST", pattern: "/v1/admin/mfa-resets", bucket: "admin-mfa-resets", limit: 10, windowSeconds: 3600 },
+  { method: "POST", pattern: "/v1/admin/staff", bucket: "admin-staff", limit: 20, windowSeconds: 3600 },
 ];
+
+/**
+ * El cubo de los preflight `OPTIONS` (deuda técnica §5.7b).
+ *
+ * Hasta el 2026-09-24 un `OPTIONS` no pasaba por NINGÚN límite: tras poner el
+ * techo por defecto a la superficie de API, era el único camino sin medir que
+ * quedaba en el Worker. No hay datos detrás —cada función contesta el preflight
+ * en su primera línea, sin tocar Postgres—, así que el riesgo es la cuota de
+ * INVOCACIONES de Edge Functions, no el coste de la base.
+ *
+ * Cubo propio y NO el por defecto, a propósito: el navegador manda el preflight
+ * MÁS la petición real, así que compartir cubo partiría por la mitad el límite
+ * efectivo de la consola respecto al de un cliente de servidor que no manda
+ * preflight. El techo es el doble del por defecto por la misma razón. Solo se
+ * aplica a la superficie de API, igual que el techo por defecto.
+ */
+export const PREFLIGHT_BUCKET = "preflight";
+export const PREFLIGHT_LIMIT = 1200;
+export const PREFLIGHT_WINDOW_SECONDS = 60;
 
 /**
  * Compara una ruta contra un patrón que admite segmentos ":param" (comodín
@@ -559,7 +603,24 @@ export default {
     registrarDiagnostico(resolucion, request);
     const clientIp = resolucion.ip ?? "unknown";
 
-    if (request.method !== "OPTIONS") {
+    if (request.method === "OPTIONS") {
+      // El preflight tiene su propio cubo — ver `PREFLIGHT_BUCKET`.
+      if (tieneTechoPorDefecto(normalizarParaLimite(url.pathname))) {
+        const allowed = await checkAndIncrement(
+          env,
+          `rl:${PREFLIGHT_BUCKET}:${clientIp}`,
+          PREFLIGHT_LIMIT,
+          PREFLIGHT_WINDOW_SECONDS,
+        );
+        if (!allowed) {
+          return jsonResponse(
+            { error: "límite de peticiones excedido para esta operación" },
+            429,
+            { "retry-after": String(PREFLIGHT_WINDOW_SECONDS) },
+          );
+        }
+      }
+    } else {
       // Barras colapsadas SOLO para decidir — ver `normalizarParaLimite`. La
       // URL que se reenvía más abajo parte de `request.url` intacto.
       const pathParaLimite = normalizarParaLimite(url.pathname);
