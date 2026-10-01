@@ -313,6 +313,10 @@ export const RESTRICTED_PATHS: LimiteRuta[] = [
   // del cliente en AWS y leer su cuenta. El backend ya exige 5 min entre dos
   // del mismo señuelo; esto acota cuántos señuelos distintos por minuto.
   { method: "POST", pattern: "/v1/emplazamientos/:id/verificar", bucket: "emplazamientos-verificar", limit: 10, windowSeconds: 60 },
+  // Aceptar o rechazar lo que propone el bucle de campañas (A2). Un mismo cubo
+  // para los dos verbos: son la misma decisión.
+  { method: "POST", pattern: "/v1/campanas/:id/acciones/:accionId/aceptar", bucket: "campanas-acciones", limit: 30, windowSeconds: 60 },
+  { method: "POST", pattern: "/v1/campanas/:id/acciones/:accionId/rechazar", bucket: "campanas-acciones", limit: 30, windowSeconds: 60 },
 ];
 
 /**
