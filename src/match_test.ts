@@ -28,6 +28,7 @@ import worker, {
   pathMatchesPattern,
   normalizarParaLimite,
   reescribirPrefijoV1,
+  reescribirWellKnown,
   tieneTechoPorDefecto,
   cabecerasHaciaSupabase,
   type Env,
@@ -797,6 +798,18 @@ describe("reescribirPrefijoV1", () => {
   });
 });
 
+describe("reescribirWellKnown", () => {
+  it("/.well-known/ssf-configuration -> /functions/v1/ssf/well-known", () => {
+    expect(reescribirWellKnown("/.well-known/ssf-configuration")).toBe("/functions/v1/ssf/well-known");
+  });
+
+  it("coincidencia exacta: ni otros documentos de /.well-known ni variantes con barra", () => {
+    expect(reescribirWellKnown("/.well-known/openid-configuration")).toBe("/.well-known/openid-configuration");
+    expect(reescribirWellKnown("/.well-known/ssf-configuration/")).toBe("/.well-known/ssf-configuration/");
+    expect(reescribirWellKnown("/.well-known/ssf-configuration/x")).toBe("/.well-known/ssf-configuration/x");
+  });
+});
+
 describe("la reescritura se aplica al reenviar (integración con worker.fetch)", () => {
   const env: Env = { SUPABASE_HOST: "example.supabase.co", SUPABASE_ANON_KEY: "anon-key" };
   let fetchMock: ReturnType<typeof vi.fn>;
@@ -836,6 +849,17 @@ describe("la reescritura se aplica al reenviar (integración con worker.fetch)",
     expect(proxiedCall).toBeDefined();
     const [proxiedInput] = proxiedCall as [RequestInfo];
     expect(urlDe(proxiedInput)).toBe("https://example.supabase.co/functions/v1/verify-turnstile?token=xyz");
+  });
+
+  it("/.well-known/ssf-configuration se reenvía a la función ssf, sin pasar por el límite", async () => {
+    const request = new Request("https://api.nulldec.com/.well-known/ssf-configuration", {
+      headers: { "cf-connecting-ip": "203.0.113.9" },
+    });
+
+    await worker.fetch(request, env);
+
+    const urls = fetchMock.mock.calls.map(([input]) => urlDe(input));
+    expect(urls).toEqual(["https://example.supabase.co/functions/v1/ssf/well-known"]);
   });
 
   it("/functions/v1/verify-turnstile se reenvía sin cambios", async () => {

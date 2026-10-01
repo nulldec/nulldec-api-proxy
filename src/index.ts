@@ -439,6 +439,22 @@ export function reescribirPrefijoV1(pathname: string): string {
   return "/functions/v1/" + pathname.slice("/v1/".length);
 }
 
+/**
+ * La única ruta fija que conoce el Worker, y no es de la API: SSF 1.0 §6
+ * exige que los metadatos del transmisor cuelguen de
+ * `<issuer>/.well-known/ssf-configuration`, y el issuer de NullDec es
+ * `https://api.nulldec.com`. La función que los sirve es `ssf`.
+ *
+ * Coincidencia EXACTA a propósito: no abre `/.well-known/*` hacia Supabase,
+ * solo este documento. Fuera de `/v1/` no tiene techo por defecto, como el
+ * resto de lo que no es superficie de API; es un JSON público y estático.
+ */
+export const WELL_KNOWN_SSF = "/.well-known/ssf-configuration";
+
+export function reescribirWellKnown(pathname: string): string {
+  return pathname === WELL_KNOWN_SSF ? "/functions/v1/ssf/well-known" : pathname;
+}
+
 async function checkAndIncrement(
   env: Env,
   key: string,
@@ -678,7 +694,7 @@ export default {
     // construir la URL de destino, porque es donde ya se tocan `hostname`
     // y `protocol` — una sola parada para las mutaciones de la URL
     // saliente. `search` y `hash` no se tocan, así que sobreviven tal cual.
-    upstream.pathname = reescribirPrefijoV1(upstream.pathname);
+    upstream.pathname = reescribirWellKnown(reescribirPrefijoV1(upstream.pathname));
     // ── Por qué en DOS pasos y no con un init completo ──
     //
     // La forma obvia —`new Request(url, { method, headers, body: request.body })`—
