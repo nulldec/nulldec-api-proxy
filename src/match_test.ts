@@ -112,6 +112,10 @@ describe("matchRestrictedPath", () => {
       "POST /v1/emplazamientos/:id/verificar",
       "POST /v1/campanas/:id/acciones/:accionId/aceptar",
       "POST /v1/campanas/:id/acciones/:accionId/rechazar",
+      "POST /v1/exposicion/dominios/:id/verificar",
+      "GET /v1/exposicion/:id/gemelo",
+      "POST /v1/exposicion/secretos/:id/senuelo",
+      "POST /v1/exposicion/secretos/:id/verificar-plantado",
     ];
     expect(
       RESTRICTED_PATHS.filter((e) => e.method !== "*").map((e) => `${e.method} ${e.pattern}`),
@@ -231,6 +235,11 @@ describe("instantánea de los cubos vivos", () => {
       // 2026-10-01, A2: el visto bueno a las acciones del bucle (dos formas, un cubo).
       { bucket: "campanas-acciones", limit: 30, windowSeconds: 60 },
       { bucket: "campanas-acciones", limit: 30, windowSeconds: 60 },
+      // 2026-10-01, AX: DNS ajeno (dos formas, un cubo), el sustituto IAM y la lectura del repo.
+      { bucket: "exposicion-dns", limit: 10, windowSeconds: 60 },
+      { bucket: "exposicion-dns", limit: 10, windowSeconds: 60 },
+      { bucket: "exposicion-sustituto", limit: 10, windowSeconds: 3600 },
+      { bucket: "exposicion-github", limit: 10, windowSeconds: 60 },
     ]);
   });
 

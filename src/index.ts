@@ -317,6 +317,15 @@ export const RESTRICTED_PATHS: LimiteRuta[] = [
   // para los dos verbos: son la misma decisión.
   { method: "POST", pattern: "/v1/campanas/:id/acciones/:accionId/aceptar", bucket: "campanas-acciones", limit: 30, windowSeconds: 60 },
   { method: "POST", pattern: "/v1/campanas/:id/acciones/:accionId/rechazar", bucket: "campanas-acciones", limit: 30, windowSeconds: 60 },
+  // Exposición real (AX). Verificar un dominio y proponer un gemelo preguntan
+  // a dos resolutores DNS públicos; un cubo para los dos, que acota cuántos
+  // nombres por minuto se le preguntan al DNS ajeno desde una sesión.
+  { method: "POST", pattern: "/v1/exposicion/dominios/:id/verificar", bucket: "exposicion-dns", limit: 10, windowSeconds: 60 },
+  { method: "GET", pattern: "/v1/exposicion/:id/gemelo", bucket: "exposicion-dns", limit: 10, windowSeconds: 60 },
+  // El sustituto de un secreto filtrado crea un usuario IAM real en la cuenta
+  // trampa (categoría A); comprobar que se plantó lee el repo por la App.
+  { method: "POST", pattern: "/v1/exposicion/secretos/:id/senuelo", bucket: "exposicion-sustituto", limit: 10, windowSeconds: 3600 },
+  { method: "POST", pattern: "/v1/exposicion/secretos/:id/verificar-plantado", bucket: "exposicion-github", limit: 10, windowSeconds: 60 },
 ];
 
 /**
