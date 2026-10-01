@@ -309,6 +309,10 @@ export const RESTRICTED_PATHS: LimiteRuta[] = [
   // empleado. Las hace la consola interna, a mano y de una en una.
   { method: "POST", pattern: "/v1/admin/mfa-resets", bucket: "admin-mfa-resets", limit: 10, windowSeconds: 3600 },
   { method: "POST", pattern: "/v1/admin/staff", bucket: "admin-staff", limit: 20, windowSeconds: 3600 },
+  // «Comprobar ahora» un emplazamiento (A0): cada llamada puede asumir el rol
+  // del cliente en AWS y leer su cuenta. El backend ya exige 5 min entre dos
+  // del mismo señuelo; esto acota cuántos señuelos distintos por minuto.
+  { method: "POST", pattern: "/v1/emplazamientos/:id/verificar", bucket: "emplazamientos-verificar", limit: 10, windowSeconds: 60 },
 ];
 
 /**

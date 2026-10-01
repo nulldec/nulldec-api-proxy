@@ -109,6 +109,7 @@ describe("matchRestrictedPath", () => {
       "POST /v1/team/invitations/:id/resend",
       "POST /v1/admin/mfa-resets",
       "POST /v1/admin/staff",
+      "POST /v1/emplazamientos/:id/verificar",
     ];
     expect(
       RESTRICTED_PATHS.filter((e) => e.method !== "*").map((e) => `${e.method} ${e.pattern}`),
@@ -152,7 +153,7 @@ describe("matchRestrictedPath", () => {
  * propósito y se deja escrito el porqué.
  */
 describe("instantánea de los cubos vivos", () => {
-  it("las veinticuatro entradas —veinte cubos— son exactamente estas", () => {
+  it("las veinticinco entradas —veintiún cubos— son exactamente estas", () => {
     const instantanea = RESTRICTED_PATHS.map(({ bucket, limit, windowSeconds }) => ({
       bucket,
       limit,
@@ -223,6 +224,8 @@ describe("instantánea de los cubos vivos", () => {
       { bucket: "team-invitations", limit: 60, windowSeconds: 3600 },
       { bucket: "admin-mfa-resets", limit: 10, windowSeconds: 3600 },
       { bucket: "admin-staff", limit: 20, windowSeconds: 3600 },
+      // 2026-10-01, A0: «comprobar ahora» un emplazamiento.
+      { bucket: "emplazamientos-verificar", limit: 10, windowSeconds: 60 },
     ]);
   });
 
