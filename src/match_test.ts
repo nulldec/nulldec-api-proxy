@@ -163,7 +163,7 @@ describe("matchRestrictedPath", () => {
  * propósito y se deja escrito el porqué.
  */
 describe("instantánea de los cubos vivos", () => {
-  it("las treinta entradas —veinticinco cubos— son exactamente estas", () => {
+  it("las treinta y cuatro entradas (veintiocho cubos) son exactamente estas", () => {
     const instantanea = RESTRICTED_PATHS.map(({ bucket, limit, windowSeconds }) => ({
       bucket,
       limit,
