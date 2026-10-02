@@ -117,6 +117,9 @@ describe("matchRestrictedPath", () => {
       "GET /v1/exposicion/:id/gemelo",
       "POST /v1/exposicion/secretos/:id/senuelo",
       "POST /v1/exposicion/secretos/:id/verificar-plantado",
+      "POST /v1/conectores/:id/instalaciones",
+      "POST /v1/conectores/instalaciones/:iid/probar",
+      "PUT /v1/conectores/instalaciones/:iid/secretos/:nombre",
     ];
     expect(
       RESTRICTED_PATHS.filter((e) => e.method !== "*").map((e) => `${e.method} ${e.pattern}`),
@@ -160,7 +163,7 @@ describe("matchRestrictedPath", () => {
  * propósito y se deja escrito el porqué.
  */
 describe("instantánea de los cubos vivos", () => {
-  it("las veintisiete entradas —veintidós cubos— son exactamente estas", () => {
+  it("las treinta entradas —veinticinco cubos— son exactamente estas", () => {
     const instantanea = RESTRICTED_PATHS.map(({ bucket, limit, windowSeconds }) => ({
       bucket,
       limit,
@@ -241,6 +244,10 @@ describe("instantánea de los cubos vivos", () => {
       { bucket: "exposicion-dns", limit: 10, windowSeconds: 60 },
       { bucket: "exposicion-sustituto", limit: 10, windowSeconds: 3600 },
       { bucket: "exposicion-github", limit: 10, windowSeconds: 60 },
+      // MK PR6 (2026-10-02): alta, prueba y secretos de /v1/conectores.
+      { bucket: "conectores-alta", limit: 20, windowSeconds: 3600 },
+      { bucket: "conectores-probar", limit: 10, windowSeconds: 3600 },
+      { bucket: "conectores-secretos", limit: 20, windowSeconds: 3600 },
     ]);
   });
 

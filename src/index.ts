@@ -326,6 +326,14 @@ export const RESTRICTED_PATHS: LimiteRuta[] = [
   // trampa (categoría A); comprobar que se plantó lee el repo por la App.
   { method: "POST", pattern: "/v1/exposicion/secretos/:id/senuelo", bucket: "exposicion-sustituto", limit: 10, windowSeconds: 3600 },
   { method: "POST", pattern: "/v1/exposicion/secretos/:id/verificar-plantado", bucket: "exposicion-github", limit: 10, windowSeconds: 60 },
+
+  // ── MK PR6: /v1/conectores (08 §4.5) ──
+  // Dar de alta crea una instalación (y, la del webhook, un secreto nuestro);
+  // probar llama a la API del tercero; guardar un secreto escribe en Vault.
+  // Cada uno con su cubo y nacidos con verbo: leer el catálogo no gasta nada.
+  { method: "POST", pattern: "/v1/conectores/:id/instalaciones", bucket: "conectores-alta", limit: 20, windowSeconds: 3600 },
+  { method: "POST", pattern: "/v1/conectores/instalaciones/:iid/probar", bucket: "conectores-probar", limit: 10, windowSeconds: 3600 },
+  { method: "PUT", pattern: "/v1/conectores/instalaciones/:iid/secretos/:nombre", bucket: "conectores-secretos", limit: 20, windowSeconds: 3600 },
 ];
 
 /**
