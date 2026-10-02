@@ -80,6 +80,15 @@ export interface LimiteRuta {
   bucket: string;
   limit: number;
   windowSeconds: number;
+  /**
+   * De quién es el contador. Por defecto, la IP del que llama. `edge-key`
+   * (06 E0, D3): el prefijo de la clave `ndg_` del Worker de NullDec Edge.
+   * Un Worker que llama a `api.nulldec.com` sale con la IP de Cloudflare
+   * (`2a06:98c0:3600::103`, medida el 2026-09-08), así que por IP TODAS las
+   * zonas de todos los clientes compartirían un cubo y una zona con tráfico
+   * dejaría sin señales a las demás.
+   */
+  clave?: "edge-key";
 }
 
 // Techo por defecto para lo no listado explícitamente abajo. Antes de esta
@@ -334,7 +343,28 @@ export const RESTRICTED_PATHS: LimiteRuta[] = [
   { method: "POST", pattern: "/v1/conectores/:id/instalaciones", bucket: "conectores-alta", limit: 20, windowSeconds: 3600 },
   { method: "POST", pattern: "/v1/conectores/instalaciones/:iid/probar", bucket: "conectores-probar", limit: 10, windowSeconds: 3600 },
   { method: "PUT", pattern: "/v1/conectores/instalaciones/:iid/secretos/:nombre", bucket: "conectores-secretos", limit: 20, windowSeconds: 3600 },
+
+  // ── 06 E1: el Worker de NullDec Edge, un cubo por instancia (D3) ──
+  // 600 señales por minuto y zona; la configuración y el latido, mucho menos:
+  // el Worker cachea la primera y manda el segundo cada cinco minutos.
+  { method: "POST", pattern: "/v1/edge/signal", bucket: "edge-signal", limit: 600, windowSeconds: 60, clave: "edge-key" },
+  { method: "GET", pattern: "/v1/edge/config", bucket: "edge-config", limit: 120, windowSeconds: 60, clave: "edge-key" },
+  { method: "POST", pattern: "/v1/edge/latido", bucket: "edge-latido", limit: 30, windowSeconds: 60, clave: "edge-key" },
 ];
+
+/**
+ * La clave del contador de una regla. Con `clave: "edge-key"` es el prefijo de
+ * la clave `ndg_` si la cabecera tiene la forma; si no la tiene (falta, otra
+ * familia, basura), se vuelve a la IP: quien no presenta una clave de borde no
+ * gana un cubo propio por inventarse un prefijo distinto en cada petición.
+ */
+export function claveDeCubo(regla: Pick<LimiteRuta, "clave"> | undefined, request: Request, clientIp: string): string {
+  if (regla?.clave === "edge-key") {
+    const m = /^ndg_([0-9a-f]{8})_[0-9a-f]{48}$/.exec(request.headers.get("x-edge-key") ?? "");
+    if (m) return `ndg:${m[1]}`;
+  }
+  return clientIp;
+}
 
 /**
  * El cubo de los preflight `OPTIONS` (deuda técnica §5.7b).
@@ -679,7 +709,7 @@ export default {
         const limit = restricted?.limit ?? DEFAULT_LIMIT;
         const windowSeconds = restricted?.windowSeconds ?? DEFAULT_WINDOW_SECONDS;
 
-        const key = `rl:${bucket}:${clientIp}`;
+        const key = `rl:${bucket}:${claveDeCubo(restricted, request, clientIp)}`;
         const allowed = await checkAndIncrement(env, key, limit, windowSeconds);
         if (!allowed) {
           return jsonResponse(

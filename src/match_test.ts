@@ -24,6 +24,7 @@ import worker, {
   PREFLIGHT_LIMIT,
   PREFLIGHT_WINDOW_SECONDS,
   RESTRICTED_PATHS,
+  claveDeCubo,
   matchRestrictedPath,
   pathMatchesPattern,
   normalizarParaLimite,
@@ -120,6 +121,9 @@ describe("matchRestrictedPath", () => {
       "POST /v1/conectores/:id/instalaciones",
       "POST /v1/conectores/instalaciones/:iid/probar",
       "PUT /v1/conectores/instalaciones/:iid/secretos/:nombre",
+      "POST /v1/edge/signal",
+      "GET /v1/edge/config",
+      "POST /v1/edge/latido",
     ];
     expect(
       RESTRICTED_PATHS.filter((e) => e.method !== "*").map((e) => `${e.method} ${e.pattern}`),
@@ -163,7 +167,7 @@ describe("matchRestrictedPath", () => {
  * propósito y se deja escrito el porqué.
  */
 describe("instantánea de los cubos vivos", () => {
-  it("las treinta y cuatro entradas (veintiocho cubos) son exactamente estas", () => {
+  it("las treinta y siete entradas (treinta y un cubos) son exactamente estas", () => {
     const instantanea = RESTRICTED_PATHS.map(({ bucket, limit, windowSeconds }) => ({
       bucket,
       limit,
@@ -248,6 +252,10 @@ describe("instantánea de los cubos vivos", () => {
       { bucket: "conectores-alta", limit: 20, windowSeconds: 3600 },
       { bucket: "conectores-probar", limit: 10, windowSeconds: 3600 },
       { bucket: "conectores-secretos", limit: 20, windowSeconds: 3600 },
+      // 06 E1 (2026-10-02): el Worker de NullDec Edge, contado por su clave y no por IP.
+      { bucket: "edge-signal", limit: 600, windowSeconds: 60 },
+      { bucket: "edge-config", limit: 120, windowSeconds: 60 },
+      { bucket: "edge-latido", limit: 30, windowSeconds: 60 },
     ]);
   });
 
@@ -1156,5 +1164,28 @@ describe("el límite del borde va por la función que exige secreto", () => {
       expect(JSON.parse(llamadas[0].body as string).p_secret).toBe("");
       expect(res.status).toBe(429);
     } finally { vi.unstubAllGlobals(); }
+  });
+});
+
+describe("06 E1, D3: el Worker de borde cuenta por su clave, no por la IP de Cloudflare", () => {
+  const CLAVE_A = "ndg_aaaaaaaa_" + "0".repeat(48);
+  const CLAVE_B = "ndg_bbbbbbbb_" + "0".repeat(48);
+  const con = (clave?: string) => new Request("https://api.nulldec.com/v1/edge/signal", {
+    method: "POST", headers: clave ? { "x-edge-key": clave } : {},
+  });
+  const regla = matchRestrictedPath("POST", "/v1/edge/signal");
+
+  it("dos zonas desde la misma IP de Cloudflare no comparten cubo", () => {
+    const ip = "2a06:98c0:3600::103";
+    expect(claveDeCubo(regla, con(CLAVE_A), ip)).toBe("ndg:aaaaaaaa");
+    expect(claveDeCubo(regla, con(CLAVE_B), ip)).toBe("ndg:bbbbbbbb");
+  });
+
+  it("sin clave de borde bien formada, cuenta por IP; y el resto de reglas, también", () => {
+    expect(claveDeCubo(regla, con(), "203.0.113.7")).toBe("203.0.113.7");
+    expect(claveDeCubo(regla, con("nde_aaaaaaaa_" + "0".repeat(48)), "203.0.113.7")).toBe("203.0.113.7");
+    expect(claveDeCubo(regla, con("ndg_aaaaaaaa_corta"), "203.0.113.7")).toBe("203.0.113.7");
+    expect(claveDeCubo(matchRestrictedPath("POST", "/v1/contact-sales"), con(CLAVE_A), "203.0.113.7")).toBe("203.0.113.7");
+    expect(claveDeCubo(undefined, con(CLAVE_A), "203.0.113.7")).toBe("203.0.113.7");
   });
 });
