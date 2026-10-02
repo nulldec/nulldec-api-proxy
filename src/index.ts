@@ -350,6 +350,10 @@ export const RESTRICTED_PATHS: LimiteRuta[] = [
   { method: "POST", pattern: "/v1/edge/signal", bucket: "edge-signal", limit: 600, windowSeconds: 60, clave: "edge-key" },
   { method: "GET", pattern: "/v1/edge/config", bucket: "edge-config", limit: 120, windowSeconds: 60, clave: "edge-key" },
   { method: "POST", pattern: "/v1/edge/latido", bucket: "edge-latido", limit: 30, windowSeconds: 60, clave: "edge-key" },
+  // 06 E6 (2026-10-02): verificar toca la web del cliente dos veces. El backend
+  // ya admite una por instancia y minuto; esto acota lo que una sesión puede
+  // pedir entre todas sus instancias.
+  { method: "POST", pattern: "/v1/edge/instancias/:id/verificar", bucket: "edge-verificar", limit: 30, windowSeconds: 3600 },
 ];
 
 /**

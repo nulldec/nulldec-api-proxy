@@ -124,6 +124,7 @@ describe("matchRestrictedPath", () => {
       "POST /v1/edge/signal",
       "GET /v1/edge/config",
       "POST /v1/edge/latido",
+      "POST /v1/edge/instancias/:id/verificar",
     ];
     expect(
       RESTRICTED_PATHS.filter((e) => e.method !== "*").map((e) => `${e.method} ${e.pattern}`),
@@ -256,6 +257,7 @@ describe("instantánea de los cubos vivos", () => {
       { bucket: "edge-signal", limit: 600, windowSeconds: 60 },
       { bucket: "edge-config", limit: 120, windowSeconds: 60 },
       { bucket: "edge-latido", limit: 30, windowSeconds: 60 },
+      { bucket: "edge-verificar", limit: 30, windowSeconds: 3600 },
     ]);
   });
 
