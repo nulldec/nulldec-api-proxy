@@ -121,6 +121,9 @@ describe("matchRestrictedPath", () => {
       "POST /v1/conectores/:id/instalaciones",
       "POST /v1/conectores/instalaciones/:iid/probar",
       "PUT /v1/conectores/instalaciones/:iid/secretos/:nombre",
+      "POST /v1/rules/executions/:eid/confirmar",
+      "DELETE /v1/conectores/sophos/aislamientos/:aid",
+      "DELETE /v1/conectores/defender/aislamientos/:aid",
       "POST /v1/edge/signal",
       "GET /v1/edge/config",
       "POST /v1/edge/latido",
@@ -253,6 +256,10 @@ describe("instantánea de los cubos vivos", () => {
       { bucket: "conectores-alta", limit: 20, windowSeconds: 3600 },
       { bucket: "conectores-probar", limit: 10, windowSeconds: 3600 },
       { bucket: "conectores-secretos", limit: 20, windowSeconds: 3600 },
+      // 2026-10-02, nivel 2: confirmar un aislamiento y levantarlo a mano (Sophos y Defender).
+      { bucket: "aislamientos", limit: 30, windowSeconds: 3600 },
+      { bucket: "aislamientos", limit: 30, windowSeconds: 3600 },
+      { bucket: "aislamientos", limit: 30, windowSeconds: 3600 },
       // 06 E1 (2026-10-02): el Worker de NullDec Edge, contado por su clave y no por IP.
       { bucket: "edge-signal", limit: 600, windowSeconds: 60 },
       { bucket: "edge-config", limit: 120, windowSeconds: 60 },
@@ -1189,5 +1196,15 @@ describe("06 E1, D3: el Worker de borde cuenta por su clave, no por la IP de Clo
     expect(claveDeCubo(regla, con("ndg_aaaaaaaa_corta"), "203.0.113.7")).toBe("203.0.113.7");
     expect(claveDeCubo(matchRestrictedPath("POST", "/v1/contact-sales"), con(CLAVE_A), "203.0.113.7")).toBe("203.0.113.7");
     expect(claveDeCubo(undefined, con(CLAVE_A), "203.0.113.7")).toBe("203.0.113.7");
+  });
+});
+
+describe("nivel 2: confirmar y levantar un aislamiento tienen cubo", () => {
+  it("las tres formas caen en «aislamientos», y leer el resumen no gasta", () => {
+    const id = "1f8c9e0a-1111-2222-3333-444455556666";
+    expect(matchRestrictedPath("POST", `/v1/rules/executions/${id}/confirmar`)?.bucket).toBe("aislamientos");
+    expect(matchRestrictedPath("DELETE", `/v1/conectores/defender/aislamientos/${id}`)?.bucket).toBe("aislamientos");
+    expect(matchRestrictedPath("DELETE", `/v1/conectores/sophos/aislamientos/${id}`)?.bucket).toBe("aislamientos");
+    expect(matchRestrictedPath("GET", "/v1/conectores/defender/resumen")).toBeUndefined();
   });
 });

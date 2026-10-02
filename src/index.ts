@@ -343,6 +343,12 @@ export const RESTRICTED_PATHS: LimiteRuta[] = [
   { method: "POST", pattern: "/v1/conectores/:id/instalaciones", bucket: "conectores-alta", limit: 20, windowSeconds: 3600 },
   { method: "POST", pattern: "/v1/conectores/instalaciones/:iid/probar", bucket: "conectores-probar", limit: 10, windowSeconds: 3600 },
   { method: "PUT", pattern: "/v1/conectores/instalaciones/:iid/secretos/:nombre", bucket: "conectores-secretos", limit: 20, windowSeconds: 3600 },
+  // Nivel 2 (03 §3.6, §5.1): confirmar una ejecución pendiente aísla un equipo
+  // en Sophos o Defender, y levantar a mano llama otra vez a su API. Un cubo
+  // para las tres formas: son la misma clase de acto sobre un activo real.
+  { method: "POST", pattern: "/v1/rules/executions/:eid/confirmar", bucket: "aislamientos", limit: 30, windowSeconds: 3600 },
+  { method: "DELETE", pattern: "/v1/conectores/sophos/aislamientos/:aid", bucket: "aislamientos", limit: 30, windowSeconds: 3600 },
+  { method: "DELETE", pattern: "/v1/conectores/defender/aislamientos/:aid", bucket: "aislamientos", limit: 30, windowSeconds: 3600 },
 
   // ── 06 E1: el Worker de NullDec Edge, un cubo por instancia (D3) ──
   // 600 señales por minuto y zona; la configuración y el latido, mucho menos:
