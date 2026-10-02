@@ -128,6 +128,11 @@ describe("matchRestrictedPath", () => {
       "GET /v1/edge/config",
       "POST /v1/edge/latido",
       "POST /v1/edge/instancias/:id/verificar",
+      "POST /v1/nodos/alta",
+      "POST /v1/nodos/latido",
+      "POST /v1/nodos/latido/credencial",
+      "POST /v1/nodos/altas",
+      "POST /v1/nodos/:id/retirar",
     ];
     expect(
       RESTRICTED_PATHS.filter((e) => e.method !== "*").map((e) => `${e.method} ${e.pattern}`),
@@ -265,6 +270,12 @@ describe("instantánea de los cubos vivos", () => {
       { bucket: "edge-config", limit: 120, windowSeconds: 60 },
       { bucket: "edge-latido", limit: 30, windowSeconds: 60 },
       { bucket: "edge-verificar", limit: 30, windowSeconds: 3600 },
+      // 10 (2026-10-02): NullDec Node, el alta por IP y el agente por su ndo_.
+      { bucket: "nodos-alta", limit: 10, windowSeconds: 60 },
+      { bucket: "nodos-latido", limit: 20, windowSeconds: 60 },
+      { bucket: "nodos-credencial", limit: 10, windowSeconds: 3600 },
+      { bucket: "nodos-altas", limit: 20, windowSeconds: 3600 },
+      { bucket: "nodos-retirar", limit: 10, windowSeconds: 3600 },
     ]);
   });
 
@@ -1206,5 +1217,19 @@ describe("nivel 2: confirmar y levantar un aislamiento tienen cubo", () => {
     expect(matchRestrictedPath("DELETE", `/v1/conectores/defender/aislamientos/${id}`)?.bucket).toBe("aislamientos");
     expect(matchRestrictedPath("DELETE", `/v1/conectores/sophos/aislamientos/${id}`)?.bucket).toBe("aislamientos");
     expect(matchRestrictedPath("GET", "/v1/conectores/defender/resumen")).toBeUndefined();
+  });
+});
+
+describe("NullDec Node: el agente cuenta por su ndo_, no por la IP", () => {
+  const con = (k?: string) => new Request("https://api.nulldec.com/functions/v1/nodos/latido", { method: "POST", headers: k ? { "x-api-key": k } : {} });
+  it("latido y credencial por prefijo; sin ndo_ válida, por IP; el alta siempre por IP", () => {
+    const latido = matchRestrictedPath("POST", "/functions/v1/nodos/latido");
+    expect(latido?.bucket).toBe("nodos-latido");
+    expect(claveDeCubo(latido, con("ndo_aaaaaaaa_" + "0".repeat(48)), "203.0.113.7")).toBe("ndo:aaaaaaaa");
+    expect(claveDeCubo(latido, con("ndn_aaaaaaaa_" + "0".repeat(48)), "203.0.113.7")).toBe("203.0.113.7");
+    expect(claveDeCubo(latido, con(), "203.0.113.7")).toBe("203.0.113.7");
+    expect(matchRestrictedPath("POST", "/v1/nodos/latido/credencial")?.bucket).toBe("nodos-credencial");
+    expect(claveDeCubo(matchRestrictedPath("POST", "/v1/nodos/alta"), con("ndo_aaaaaaaa_" + "0".repeat(48)), "203.0.113.7")).toBe("203.0.113.7");
+    expect(matchRestrictedPath("GET", "/v1/nodos")).toBeUndefined();
   });
 });

@@ -88,7 +88,7 @@ export interface LimiteRuta {
    * zonas de todos los clientes compartirían un cubo y una zona con tráfico
    * dejaría sin señales a las demás.
    */
-  clave?: "edge-key";
+  clave?: "edge-key" | "nodo-key";
 }
 
 // Techo por defecto para lo no listado explícitamente abajo. Antes de esta
@@ -360,6 +360,17 @@ export const RESTRICTED_PATHS: LimiteRuta[] = [
   // ya admite una por instancia y minuto; esto acota lo que una sesión puede
   // pedir entre todas sus instancias.
   { method: "POST", pattern: "/v1/edge/instancias/:id/verificar", bucket: "edge-verificar", limit: 30, windowSeconds: 3600 },
+
+  // ── 10: NullDec Node ──
+  // El alta, por IP (quien la llama aún no tiene credencial; la función tiene
+  // además su propio 10/60 s). El latido y la credencial, por la `ndo_` del
+  // nodo: varios nodos tras el mismo NAT no comparten cubo. Emitir un token
+  // de alta y retirar un nodo (destruye sus señuelos), acotados por sesión.
+  { method: "POST", pattern: "/v1/nodos/alta", bucket: "nodos-alta", limit: 10, windowSeconds: 60 },
+  { method: "POST", pattern: "/v1/nodos/latido", bucket: "nodos-latido", limit: 20, windowSeconds: 60, clave: "nodo-key" },
+  { method: "POST", pattern: "/v1/nodos/latido/credencial", bucket: "nodos-credencial", limit: 10, windowSeconds: 3600, clave: "nodo-key" },
+  { method: "POST", pattern: "/v1/nodos/altas", bucket: "nodos-altas", limit: 20, windowSeconds: 3600 },
+  { method: "POST", pattern: "/v1/nodos/:id/retirar", bucket: "nodos-retirar", limit: 10, windowSeconds: 3600 },
 ];
 
 /**
@@ -372,6 +383,11 @@ export function claveDeCubo(regla: Pick<LimiteRuta, "clave"> | undefined, reques
   if (regla?.clave === "edge-key") {
     const m = /^ndg_([0-9a-f]{8})_[0-9a-f]{48}$/.exec(request.headers.get("x-edge-key") ?? "");
     if (m) return `ndg:${m[1]}`;
+  }
+  // NullDec Node (10 §5.2): el agente del nodo, por el prefijo de su `ndo_`.
+  if (regla?.clave === "nodo-key") {
+    const m = /^ndo_([0-9a-f]{8})_[0-9a-f]{48}$/.exec(request.headers.get("x-api-key") ?? "");
+    if (m) return `ndo:${m[1]}`;
   }
   return clientIp;
 }
