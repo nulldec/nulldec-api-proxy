@@ -349,6 +349,9 @@ export const RESTRICTED_PATHS: LimiteRuta[] = [
   { method: "POST", pattern: "/v1/rules/executions/:eid/confirmar", bucket: "aislamientos", limit: 30, windowSeconds: 3600 },
   { method: "DELETE", pattern: "/v1/conectores/sophos/aislamientos/:aid", bucket: "aislamientos", limit: 30, windowSeconds: 3600 },
   { method: "DELETE", pattern: "/v1/conectores/defender/aislamientos/:aid", bucket: "aislamientos", limit: 30, windowSeconds: 3600 },
+  // Tanda 22: levantar una contención de CrowdStrike o SentinelOne, el mismo cubo.
+  { method: "DELETE", pattern: "/v1/conectores/crowdstrike/contenciones/:cid", bucket: "aislamientos", limit: 30, windowSeconds: 3600 },
+  { method: "DELETE", pattern: "/v1/conectores/sentinelone/contenciones/:cid", bucket: "aislamientos", limit: 30, windowSeconds: 3600 },
 
   // ── 06 E1: el Worker de NullDec Edge, un cubo por instancia (D3) ──
   // 600 señales por minuto y zona; la configuración y el latido, mucho menos:

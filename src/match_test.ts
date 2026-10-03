@@ -124,6 +124,8 @@ describe("matchRestrictedPath", () => {
       "POST /v1/rules/executions/:eid/confirmar",
       "DELETE /v1/conectores/sophos/aislamientos/:aid",
       "DELETE /v1/conectores/defender/aislamientos/:aid",
+      "DELETE /v1/conectores/crowdstrike/contenciones/:cid",
+      "DELETE /v1/conectores/sentinelone/contenciones/:cid",
       "POST /v1/edge/signal",
       "GET /v1/edge/config",
       "POST /v1/edge/latido",
@@ -262,6 +264,8 @@ describe("instantánea de los cubos vivos", () => {
       { bucket: "conectores-probar", limit: 10, windowSeconds: 3600 },
       { bucket: "conectores-secretos", limit: 20, windowSeconds: 3600 },
       // 2026-10-02, nivel 2: confirmar un aislamiento y levantarlo a mano (Sophos y Defender).
+      { bucket: "aislamientos", limit: 30, windowSeconds: 3600 },
+      { bucket: "aislamientos", limit: 30, windowSeconds: 3600 },
       { bucket: "aislamientos", limit: 30, windowSeconds: 3600 },
       { bucket: "aislamientos", limit: 30, windowSeconds: 3600 },
       { bucket: "aislamientos", limit: 30, windowSeconds: 3600 },
@@ -1216,6 +1220,8 @@ describe("nivel 2: confirmar y levantar un aislamiento tienen cubo", () => {
     expect(matchRestrictedPath("POST", `/v1/rules/executions/${id}/confirmar`)?.bucket).toBe("aislamientos");
     expect(matchRestrictedPath("DELETE", `/v1/conectores/defender/aislamientos/${id}`)?.bucket).toBe("aislamientos");
     expect(matchRestrictedPath("DELETE", `/v1/conectores/sophos/aislamientos/${id}`)?.bucket).toBe("aislamientos");
+    expect(matchRestrictedPath("DELETE", `/v1/conectores/crowdstrike/contenciones/${id}`)?.bucket).toBe("aislamientos");
+    expect(matchRestrictedPath("DELETE", `/v1/conectores/sentinelone/contenciones/${id}`)?.bucket).toBe("aislamientos");
     expect(matchRestrictedPath("GET", "/v1/conectores/defender/resumen")).toBeUndefined();
   });
 });
