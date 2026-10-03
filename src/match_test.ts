@@ -130,6 +130,7 @@ describe("matchRestrictedPath", () => {
       "GET /v1/edge/config",
       "POST /v1/edge/latido",
       "POST /v1/edge/instancias/:id/verificar",
+      "POST /v1/edge/instancias/:id/instalar",
       "POST /v1/nodos/alta",
       "POST /v1/nodos/latido",
       "POST /v1/nodos/latido/credencial",
@@ -274,6 +275,7 @@ describe("instantánea de los cubos vivos", () => {
       { bucket: "edge-config", limit: 120, windowSeconds: 60 },
       { bucket: "edge-latido", limit: 30, windowSeconds: 60 },
       { bucket: "edge-verificar", limit: 30, windowSeconds: 3600 },
+      { bucket: "edge-instalar", limit: 10, windowSeconds: 3600 },
       // 10 (2026-10-02): NullDec Node, el alta por IP y el agente por su ndo_.
       { bucket: "nodos-alta", limit: 10, windowSeconds: 60 },
       { bucket: "nodos-latido", limit: 20, windowSeconds: 60 },

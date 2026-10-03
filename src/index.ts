@@ -363,6 +363,9 @@ export const RESTRICTED_PATHS: LimiteRuta[] = [
   // ya admite una por instancia y minuto; esto acota lo que una sesión puede
   // pedir entre todas sus instancias.
   { method: "POST", pattern: "/v1/edge/instancias/:id/verificar", bucket: "edge-verificar", limit: 30, windowSeconds: 3600 },
+  // 06 E2.3 (2026-10-03): el instalador asistido llama dos veces a Cloudflare con
+  // el token del cliente; pocas por hora bastan para reintentar un fallo.
+  { method: "POST", pattern: "/v1/edge/instancias/:id/instalar", bucket: "edge-instalar", limit: 10, windowSeconds: 3600 },
 
   // ── 10: NullDec Node ──
   // El alta, por IP (quien la llama aún no tiene credencial; la función tiene
