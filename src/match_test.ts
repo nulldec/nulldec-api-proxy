@@ -136,6 +136,14 @@ describe("matchRestrictedPath", () => {
       "POST /v1/nodos/latido/credencial",
       "POST /v1/nodos/altas",
       "POST /v1/nodos/:id/retirar",
+      // TAXII es de solo lectura: nació con GET (07 §3.5).
+      "GET /taxii2",
+      "GET /v1/taxii/:a",
+      "GET /v1/taxii/:a/:b",
+      "GET /v1/taxii/:a/:b/:c",
+      "GET /v1/taxii/:a/:b/:c/:d",
+      "GET /v1/taxii/:a/:b/:c/:d/:e",
+      "GET /v1/taxii/:a/:b/:c/:d/:e/:f",
     ];
     expect(
       RESTRICTED_PATHS.filter((e) => e.method !== "*").map((e) => `${e.method} ${e.pattern}`),
@@ -282,6 +290,13 @@ describe("instantánea de los cubos vivos", () => {
       { bucket: "nodos-credencial", limit: 10, windowSeconds: 3600 },
       { bucket: "nodos-altas", limit: 20, windowSeconds: 3600 },
       { bucket: "nodos-retirar", limit: 10, windowSeconds: 3600 },
+      { bucket: "taxii", limit: 120, windowSeconds: 60 },
+      { bucket: "taxii", limit: 120, windowSeconds: 60 },
+      { bucket: "taxii", limit: 120, windowSeconds: 60 },
+      { bucket: "taxii", limit: 120, windowSeconds: 60 },
+      { bucket: "taxii", limit: 120, windowSeconds: 60 },
+      { bucket: "taxii", limit: 120, windowSeconds: 60 },
+      { bucket: "taxii", limit: 120, windowSeconds: 60 },
     ]);
   });
 
@@ -868,6 +883,32 @@ describe("reescribirWellKnown", () => {
     expect(reescribirWellKnown("/.well-known/openid-configuration")).toBe("/.well-known/openid-configuration");
     expect(reescribirWellKnown("/.well-known/ssf-configuration/")).toBe("/.well-known/ssf-configuration/");
     expect(reescribirWellKnown("/.well-known/ssf-configuration/x")).toBe("/.well-known/ssf-configuration/x");
+  });
+});
+
+describe("TAXII 2.1 (07 §3.5)", () => {
+  it("/taxii2/ y /taxii2 van al discovery de la función taxii; nada debajo", () => {
+    expect(reescribirWellKnown("/taxii2/")).toBe("/functions/v1/taxii/discovery");
+    expect(reescribirWellKnown("/taxii2")).toBe("/functions/v1/taxii/discovery");
+    expect(reescribirWellKnown("/taxii2/otra")).toBe("/taxii2/otra");
+  });
+
+  it("todas las profundidades del api root, y el discovery, caen en el cubo taxii", () => {
+    const col = "2f6c1e44-5b0a-4c8e-9a51-6d3f0b7a1c01";
+    for (const ruta of [
+      "/taxii2/",
+      "/v1/taxii/nulldec/",
+      "/v1/taxii/nulldec/collections/",
+      `/v1/taxii/nulldec/collections/${col}/`,
+      `/v1/taxii/nulldec/collections/${col}/objects/`,
+      `/v1/taxii/nulldec/collections/${col}/manifest/`,
+      `/v1/taxii/nulldec/collections/${col}/objects/indicator--x/`,
+      `/v1/taxii/nulldec/collections/${col}/objects/indicator--x/versions/`,
+    ]) {
+      const r = matchRestrictedPath("GET", ruta);
+      expect(r?.bucket, ruta).toBe("taxii");
+      expect(r?.limit).toBe(120);
+    }
   });
 });
 

@@ -377,6 +377,19 @@ export const RESTRICTED_PATHS: LimiteRuta[] = [
   { method: "POST", pattern: "/v1/nodos/latido/credencial", bucket: "nodos-credencial", limit: 10, windowSeconds: 3600, clave: "nodo-key" },
   { method: "POST", pattern: "/v1/nodos/altas", bucket: "nodos-altas", limit: 20, windowSeconds: 3600 },
   { method: "POST", pattern: "/v1/nodos/:id/retirar", bucket: "nodos-retirar", limit: 10, windowSeconds: 3600 },
+
+  // ── 07 §3.5: TAXII 2.1 ──
+  // Un cubo para todo el servidor, por IP: discovery (`/taxii2/`, fuera de
+  // `/v1/` y por eso sin techo por defecto) y cada profundidad del api root,
+  // de `/v1/taxii/nulldec` (3 segmentos) a `.../objects/:oid/versions` (8):
+  // `pathMatchesPattern` exige el mismo número de segmentos.
+  { method: "GET", pattern: "/taxii2", bucket: "taxii", limit: 120, windowSeconds: 60 },
+  { method: "GET", pattern: "/v1/taxii/:a", bucket: "taxii", limit: 120, windowSeconds: 60 },
+  { method: "GET", pattern: "/v1/taxii/:a/:b", bucket: "taxii", limit: 120, windowSeconds: 60 },
+  { method: "GET", pattern: "/v1/taxii/:a/:b/:c", bucket: "taxii", limit: 120, windowSeconds: 60 },
+  { method: "GET", pattern: "/v1/taxii/:a/:b/:c/:d", bucket: "taxii", limit: 120, windowSeconds: 60 },
+  { method: "GET", pattern: "/v1/taxii/:a/:b/:c/:d/:e", bucket: "taxii", limit: 120, windowSeconds: 60 },
+  { method: "GET", pattern: "/v1/taxii/:a/:b/:c/:d/:e/:f", bucket: "taxii", limit: 120, windowSeconds: 60 },
 ];
 
 /**
@@ -521,8 +534,17 @@ export function reescribirPrefijoV1(pathname: string): string {
  */
 export const WELL_KNOWN_SSF = "/.well-known/ssf-configuration";
 
+/**
+ * La segunda ruta fija, también impuesta por un estándar: TAXII 2.1 §4.1 pone
+ * el discovery en `/taxii2/` de la raíz del servidor. La sirve la función
+ * `taxii` (07 §3.5). Igual de exacta: con y sin barra final, nada debajo.
+ */
+export const DISCOVERY_TAXII = "/taxii2/";
+
 export function reescribirWellKnown(pathname: string): string {
-  return pathname === WELL_KNOWN_SSF ? "/functions/v1/ssf/well-known" : pathname;
+  if (pathname === WELL_KNOWN_SSF) return "/functions/v1/ssf/well-known";
+  if (pathname === DISCOVERY_TAXII || pathname === "/taxii2") return "/functions/v1/taxii/discovery";
+  return pathname;
 }
 
 async function checkAndIncrement(
