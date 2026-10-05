@@ -378,6 +378,13 @@ export const RESTRICTED_PATHS: LimiteRuta[] = [
   { method: "POST", pattern: "/v1/nodos/altas", bucket: "nodos-altas", limit: 20, windowSeconds: 3600 },
   { method: "POST", pattern: "/v1/nodos/:id/retirar", bucket: "nodos-retirar", limit: 10, windowSeconds: 3600 },
 
+  // ── 07 §1.7: el servidor MCP ──
+  // El endpoint son 2 segmentos (`/v1/mcp`); decidir una acción, 5. El límite
+  // por concesión (60/min, 1.000/día) va en la función: detrás de un agente de
+  // SOC en la nube la IP es compartida.
+  { method: "*", pattern: "/v1/mcp", bucket: "mcp", limit: 300, windowSeconds: 60 },
+  { method: "*", pattern: "/v1/mcp/acciones/:id/decidir", bucket: "mcp-decidir", limit: 30, windowSeconds: 3600 },
+
   // ── 07 §3.5: TAXII 2.1 ──
   // Un cubo para todo el servidor, por IP: discovery (`/taxii2/`, fuera de
   // `/v1/` y por eso sin techo por defecto) y cada profundidad del api root,
@@ -541,8 +548,15 @@ export const WELL_KNOWN_SSF = "/.well-known/ssf-configuration";
  */
 export const DISCOVERY_TAXII = "/taxii2/";
 
+/**
+ * La tercera, por RFC 9728 §3: la metadata del recurso protegido se inserta
+ * ENTRE el host y la ruta del recurso (`/v1/mcp`). La sirve la función `mcp`.
+ */
+export const WELL_KNOWN_MCP = "/.well-known/oauth-protected-resource/v1/mcp";
+
 export function reescribirWellKnown(pathname: string): string {
   if (pathname === WELL_KNOWN_SSF) return "/functions/v1/ssf/well-known";
+  if (pathname === WELL_KNOWN_MCP) return "/functions/v1/mcp/.well-known/oauth-protected-resource";
   if (pathname === DISCOVERY_TAXII || pathname === "/taxii2") return "/functions/v1/taxii/discovery";
   return pathname;
 }

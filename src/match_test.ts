@@ -290,6 +290,8 @@ describe("instantánea de los cubos vivos", () => {
       { bucket: "nodos-credencial", limit: 10, windowSeconds: 3600 },
       { bucket: "nodos-altas", limit: 20, windowSeconds: 3600 },
       { bucket: "nodos-retirar", limit: 10, windowSeconds: 3600 },
+      { bucket: "mcp", limit: 300, windowSeconds: 60 },
+      { bucket: "mcp-decidir", limit: 30, windowSeconds: 3600 },
       { bucket: "taxii", limit: 120, windowSeconds: 60 },
       { bucket: "taxii", limit: 120, windowSeconds: 60 },
       { bucket: "taxii", limit: 120, windowSeconds: 60 },
@@ -883,6 +885,19 @@ describe("reescribirWellKnown", () => {
     expect(reescribirWellKnown("/.well-known/openid-configuration")).toBe("/.well-known/openid-configuration");
     expect(reescribirWellKnown("/.well-known/ssf-configuration/")).toBe("/.well-known/ssf-configuration/");
     expect(reescribirWellKnown("/.well-known/ssf-configuration/x")).toBe("/.well-known/ssf-configuration/x");
+  });
+});
+
+describe("MCP (07 §1.7)", () => {
+  it("la metadata RFC 9728 va a la función mcp; nada más de /.well-known", () => {
+    expect(reescribirWellKnown("/.well-known/oauth-protected-resource/v1/mcp")).toBe("/functions/v1/mcp/.well-known/oauth-protected-resource");
+    expect(reescribirWellKnown("/.well-known/oauth-protected-resource")).toBe("/.well-known/oauth-protected-resource");
+  });
+
+  it("el endpoint y decidir tienen su cubo; las demás rutas de consola, el techo por defecto", () => {
+    expect(matchRestrictedPath("POST", "/v1/mcp")?.bucket).toBe("mcp");
+    expect(matchRestrictedPath("POST", "/v1/mcp/acciones/00000000-0000-4000-8000-000000000001/decidir")?.bucket).toBe("mcp-decidir");
+    expect(matchRestrictedPath("GET", "/v1/mcp/concesiones")).toBeUndefined();
   });
 });
 
