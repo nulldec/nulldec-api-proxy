@@ -1,0 +1,57 @@
+name = "nulldec-registry"
+main = "src/index.ts"
+
+# ── QUÉ ES ──
+# registry.nulldec.com: el registro de SOLO LECTURA de NullDec Node
+# (10-nulldec-node.md §6.3). Un Worker APARTE de nulldec-api-proxy: su propio
+# nombre, su propio fichero de configuración y su propio despliegue. Desplegar
+# este no toca api.nulldec.com, y al revés.
+#
+#   npx wrangler deploy --config registry/wrangler.toml     (desde la raíz del repo)
+
+# Misma fecha que el Worker de la API, para que los dos corran el mismo runtime.
+compatibility_date = "2026-07-01"
+compatibility_flags = []
+
+# Custom Domain, igual que api.nulldec.com en el wrangler.toml de la raíz.
+#
+# ⚠ TAREA DEL PROPIETARIO: el primer `wrangler deploy` crea el registro DNS de
+#   registry.nulldec.com en la zona nulldec.com (lo gestiona Cloudflare). Antes
+#   de desplegar, comprobar en el panel que NO existe ya un registro con ese
+#   nombre: si existe, el despliegue falla y hay que decidir a mano qué hacer
+#   con él. No se ha creado ni comprobado desde aquí.
+routes = [
+  { pattern = "registry.nulldec.com", custom_domain = true }
+]
+
+# Una sola puerta de entrada: sin *.workers.dev.
+workers_dev = false
+
+[vars]
+# Base de la API de NullDec. El Worker llama a
+# <NULLDEC_API>/functions/v1/nodos/registro/token con la ndo_ del nodo.
+# Declarada aquí porque wrangler BORRA en cada despliegue las variables de texto
+# plano que no aparezcan en este fichero.
+NULLDEC_API = "https://api.nulldec.com"
+
+[secrets]
+# Ninguno se escribe en este fichero. Se ponen con
+#
+#   npx wrangler secret put <NOMBRE> --config registry/wrangler.toml
+#
+#   REGISTRY_JWT_SECRET  secreto HMAC de los JWT del registro (32 caracteres o
+#                        más; `openssl rand -hex 32`). Rotarlo invalida todos
+#                        los tokens vivos, que duran 5 min: es inocuo.
+#   GHCR_USER            usuario de GitHub dueño del token de lectura.
+#   GHCR_TOKEN           token con SOLO `read:packages` sobre la organización
+#                        nulldec. Nunca sale del Worker.
+#
+# Requeridos: sin ellos wrangler aborta el despliegue en vez de publicar un
+# registro que responde 503 a todo. El código además falla en cerrado si faltan.
+required = ["REGISTRY_JWT_SECRET", "GHCR_USER", "GHCR_TOKEN"]
+
+[observability]
+# Los `console.error` del Worker solo llevan estados HTTP, el repo y el PREFIJO
+# de la clave del nodo; nunca la clave ni el token de GHCR.
+enabled = true
+head_sampling_rate = 1
