@@ -293,6 +293,20 @@ describe("manifiestos", () => {
     expect(llamadas.some((q) => q.url.startsWith("https://ghcr.io/"))).toBe(false);
   });
 
+  it("la firma de cosign de un digest concedido se resuelve por su etiqueta; la de otro, no", async () => {
+    const etiqueta = `sha256-${DIGEST_M.slice(7)}.sig`;
+    const FIRMA = JSON.stringify({ schemaVersion: 2, firma: true });
+    const dFirma = await sha(FIRMA);
+    rutas[`* https://ghcr.io/v2/nulldec/interactive-orchestrator/manifests/${etiqueta}`] = () =>
+      new Response(FIRMA, { status: 200, headers: { "Content-Type": "application/vnd.oci.image.manifest.v1+json", "Docker-Content-Digest": dFirma } });
+    const t = await jwtValido();
+    const r = await pedir(`/v2/interactive-orchestrator/manifests/${etiqueta}`, bearer(t));
+    expect(r.status).toBe(200);
+    expect(r.headers.get("Docker-Content-Digest")).toBe(dFirma);
+    const otra = await pedir(`/v2/interactive-orchestrator/manifests/sha256-${DIGEST_OTRO.slice(7)}.sig`, bearer(t));
+    expect(otra.status).toBe(404);
+  });
+
   it("digest no concedido → 404", async () => {
     const t = await jwtValido();
     const r = await pedir(`/v2/interactive-orchestrator/manifests/${DIGEST_OTRO}`, bearer(t));

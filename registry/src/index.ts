@@ -46,6 +46,12 @@ export const REPOS: readonly string[] = [
 /** Misma forma que `generateNodeKey` / `extractNodePrefix` del backend (_shared/apikey.ts). */
 const CLAVE_NODO = /^ndo_([0-9a-f]{8})_[0-9a-f]{48}$/;
 const DIGEST = /^sha256:[0-9a-f]{64}$/;
+/**
+ * La única etiqueta que se resuelve: la que cosign usa para guardar la firma,
+ * la atestación o el SBOM de una imagen (`sha256-<hex>.sig`). Solo de un
+ * digest concedido: sin ella el nodo no puede verificar lo que descarga.
+ */
+const ETIQUETA_DE_FIRMA = /^sha256-([0-9a-f]{64})\.(sig|att|sbom)$/;
 const RUTA = /^\/v2\/([a-z0-9-]+)\/(manifests|blobs)\/([^/]+)$/;
 const ACCEPT_POR_DEFECTO = [
   "application/vnd.oci.image.index.v1+json",
@@ -356,7 +362,7 @@ async function sha256(buf: ArrayBuffer): Promise<string> {
   return "sha256:" + Array.from(h, (b) => b.toString(16).padStart(2, "0")).join("");
 }
 
-async function manifiesto(req: Request, env: Env, repo: string, digest: string): Promise<Response> {
+async function manifiesto(req: Request, env: Env, repo: string, digest: string, porEtiqueta = false): Promise<Response> {
   const r = await aGhcr(env, repo, `manifests/${digest}`, {
     method: req.method,
     headers: { Accept: req.headers.get("Accept") || ACCEPT_POR_DEFECTO },
@@ -368,7 +374,12 @@ async function manifiesto(req: Request, env: Env, repo: string, digest: string):
     return error(502, "UNAVAILABLE", "upstream error");
   }
   const dcd = r.headers.get("Docker-Content-Digest");
-  if (dcd && dcd !== digest) {
+  if (porEtiqueta) {
+    // La firma de cosign se pide por etiqueta: su digest lo da GHCR y se
+    // comprueba igual que el de los demás, contra el cuerpo (abajo, en GET).
+    if (!dcd || !DIGEST.test(dcd)) return error(502, "DIGEST_INVALID", "upstream digest missing");
+    digest = dcd;
+  } else if (dcd && dcd !== digest) {
     console.error(`registry: digest distinto de GHCR (${repo})`);
     return error(502, "DIGEST_INVALID", "upstream digest mismatch");
   }
@@ -451,6 +462,11 @@ export default {
       }
       if (tipo === "manifests") {
         // Solo por digest, y solo los concedidos: una etiqueta nunca resuelve aquí.
+        const firma = ETIQUETA_DE_FIRMA.exec(ref);
+        if (firma) {
+          if (!r.digests.includes(`${repo}@sha256:${firma[1]}`)) return error(404, "MANIFEST_UNKNOWN", "manifest unknown");
+          return manifiesto(req, env, repo, ref, true);
+        }
         if (!DIGEST.test(ref) || !r.digests.includes(`${repo}@${ref}`)) {
           return error(404, "MANIFEST_UNKNOWN", "manifest unknown");
         }
