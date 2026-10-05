@@ -385,6 +385,12 @@ export const RESTRICTED_PATHS: LimiteRuta[] = [
   { method: "*", pattern: "/v1/mcp", bucket: "mcp", limit: 300, windowSeconds: 60 },
   { method: "*", pattern: "/v1/mcp/acciones/:id/decidir", bucket: "mcp-decidir", limit: 30, windowSeconds: 3600 },
 
+  // ── 07 §2.7: el SDK de señuelos en agentes de IA (clave ndx_) ──
+  // Los eventos, el mismo techo que handle-agent-signal; la función tiene
+  // además el suyo por clave. Leer el despliegue lo hace el SDK al arrancar.
+  { method: "POST", pattern: "/v1/senuelos-ia/eventos", bucket: "senuelos-ia", limit: 120, windowSeconds: 60 },
+  { method: "GET", pattern: "/v1/senuelos-ia/despliegue", bucket: "senuelos-ia-despliegue", limit: 30, windowSeconds: 60 },
+
   // ── 07 §3.5: TAXII 2.1 ──
   // Un cubo para todo el servidor, por IP: discovery (`/taxii2/`, fuera de
   // `/v1/` y por eso sin techo por defecto) y cada profundidad del api root,

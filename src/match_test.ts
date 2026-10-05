@@ -136,6 +136,9 @@ describe("matchRestrictedPath", () => {
       "POST /v1/nodos/latido/credencial",
       "POST /v1/nodos/altas",
       "POST /v1/nodos/:id/retirar",
+      // El SDK de señuelos en agentes (07 §2.7): nacieron con su verbo.
+      "POST /v1/senuelos-ia/eventos",
+      "GET /v1/senuelos-ia/despliegue",
       // TAXII es de solo lectura: nació con GET (07 §3.5).
       "GET /taxii2",
       "GET /v1/taxii/:a",
@@ -292,6 +295,8 @@ describe("instantánea de los cubos vivos", () => {
       { bucket: "nodos-retirar", limit: 10, windowSeconds: 3600 },
       { bucket: "mcp", limit: 300, windowSeconds: 60 },
       { bucket: "mcp-decidir", limit: 30, windowSeconds: 3600 },
+      { bucket: "senuelos-ia", limit: 120, windowSeconds: 60 },
+      { bucket: "senuelos-ia-despliegue", limit: 30, windowSeconds: 60 },
       { bucket: "taxii", limit: 120, windowSeconds: 60 },
       { bucket: "taxii", limit: 120, windowSeconds: 60 },
       { bucket: "taxii", limit: 120, windowSeconds: 60 },
