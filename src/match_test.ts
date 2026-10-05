@@ -624,6 +624,26 @@ describe("comportamiento de checkAndIncrement ante fallo y ante límite alcanzad
     expect(reenviada, "la petición debe llegar a upstream pese al fallo del límite").toBeDefined();
   });
 
+  it("una respuesta que pasó por un cubo anuncia su política (x-ratelimit-limit, ratelimit-policy)", async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      if (urlDeEntrada(input).includes("/rest/v1/rpc/rate_limit_check_borde")) {
+        return new Response("true", { status: 200, headers: { "content-type": "application/json" } });
+      }
+      return new Response("ok-upstream", { status: 200, headers: { "x-de-arriba": "1" } });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const res = await worker.fetch(
+      new Request("https://api.nulldec.com/v1/signals?schema=2", { headers: { "cf-connecting-ip": "203.0.113.9" } }),
+      env,
+    );
+    expect(res.status).toBe(200);
+    expect(res.headers.get("x-ratelimit-limit")).toBe("600");
+    expect(res.headers.get("ratelimit-policy")).toBe("600;w=60");
+    expect(res.headers.get("x-de-arriba")).toBe("1");
+    expect(await res.text()).toBe("ok-upstream");
+  });
+
   it("si la RPC lanza (fallo de red), la petición también se deja pasar", async () => {
     callarError();
     const fetchMock = vi.fn(async (input: RequestInfo | URL) => {

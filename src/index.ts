@@ -705,6 +705,8 @@ export default {
     // propias repeticiones, así que no puede inundar el registro.
     registrarDiagnostico(resolucion, request);
     const clientIp = resolucion.ip ?? "unknown";
+    // El cubo que se aplicó, para anunciarlo en la respuesta (08 §6.2.4).
+    let politica: { limit: number; windowSeconds: number } | null = null;
 
     if (request.method === "OPTIONS") {
       // El preflight tiene su propio cubo — ver `PREFLIGHT_BUCKET`.
@@ -742,6 +744,7 @@ export default {
         const windowSeconds = restricted?.windowSeconds ?? DEFAULT_WINDOW_SECONDS;
 
         const key = `rl:${bucket}:${claveDeCubo(restricted, request, clientIp)}`;
+        politica = { limit, windowSeconds };
         const allowed = await checkAndIncrement(env, key, limit, windowSeconds);
         if (!allowed) {
           return jsonResponse(
@@ -781,6 +784,21 @@ export default {
     const proxied = new Request(haciaSupabase, {
       headers: cabecerasHaciaSupabase(request, env, clientIp),
     });
-    return fetch(proxied);
+    const respuesta = await fetch(proxied);
+    return politica ? conPoliticaDeLimite(respuesta, politica) : respuesta;
   },
 };
+
+/**
+ * La respuesta con el límite que se le aplicó (08 §6.2.4): un SIEM que sondea
+ * (el `rateLimitConfig` del conector de Sentinel) ajusta su ritmo sin esperar
+ * a un 429. Solo la política, no lo que queda: el contador vive en Postgres y
+ * leerlo costaría otra llamada por petición. `retry-after` sigue saliendo
+ * solo en el 429.
+ */
+export function conPoliticaDeLimite(r: Response, p: { limit: number; windowSeconds: number }): Response {
+  const h = new Headers(r.headers);
+  h.set("x-ratelimit-limit", String(p.limit));
+  h.set("ratelimit-policy", `${p.limit};w=${p.windowSeconds}`);
+  return new Response(r.body, { status: r.status, statusText: r.statusText, headers: h });
+}
