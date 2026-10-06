@@ -136,6 +136,8 @@ describe("matchRestrictedPath", () => {
       "POST /v1/nodos/latido/credencial",
       "POST /v1/nodos/altas",
       "POST /v1/nodos/:id/retirar",
+      // El receptor SSF (03 §4.1): RFC 8935 solo empuja con POST.
+      "POST /v1/ssf/receptor/:id",
       // El SDK de señuelos en agentes (07 §2.7): nacieron con su verbo.
       "POST /v1/senuelos-ia/eventos",
       "GET /v1/senuelos-ia/despliegue",
@@ -295,6 +297,7 @@ describe("instantánea de los cubos vivos", () => {
       { bucket: "nodos-retirar", limit: 10, windowSeconds: 3600 },
       { bucket: "mcp", limit: 300, windowSeconds: 60 },
       { bucket: "mcp-decidir", limit: 30, windowSeconds: 3600 },
+      { bucket: "ssf-receptor", limit: 120, windowSeconds: 60 },
       { bucket: "senuelos-ia", limit: 120, windowSeconds: 60 },
       { bucket: "senuelos-ia-despliegue", limit: 30, windowSeconds: 60 },
       { bucket: "taxii", limit: 120, windowSeconds: 60 },
@@ -902,6 +905,7 @@ describe("MCP (07 §1.7)", () => {
   it("el endpoint y decidir tienen su cubo; las demás rutas de consola, el techo por defecto", () => {
     expect(matchRestrictedPath("POST", "/v1/mcp")?.bucket).toBe("mcp");
     expect(matchRestrictedPath("POST", "/v1/mcp/acciones/00000000-0000-4000-8000-000000000001/decidir")?.bucket).toBe("mcp-decidir");
+    expect(matchRestrictedPath("POST", "/v1/ssf/receptor/00000000-0000-4000-8000-000000000001")?.bucket).toBe("ssf-receptor");
     expect(matchRestrictedPath("GET", "/v1/mcp/concesiones")).toBeUndefined();
   });
 });

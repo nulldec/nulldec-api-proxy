@@ -385,6 +385,11 @@ export const RESTRICTED_PATHS: LimiteRuta[] = [
   { method: "*", pattern: "/v1/mcp", bucket: "mcp", limit: 300, windowSeconds: 60 },
   { method: "*", pattern: "/v1/mcp/acciones/:id/decidir", bucket: "mcp-decidir", limit: 30, windowSeconds: 3600 },
 
+  // ── 03 §4.1: el receptor SSF entrante (RFC 8935) ──
+  // Por IP: lo llama el IdP del cliente (Okta, Entra) desde su red. Un IdP
+  // empuja ráfagas al revocar en bloque; 120/min cubre eso y no más.
+  { method: "POST", pattern: "/v1/ssf/receptor/:id", bucket: "ssf-receptor", limit: 120, windowSeconds: 60 },
+
   // ── 07 §2.7: el SDK de señuelos en agentes de IA (clave ndx_) ──
   // Los eventos, el mismo techo que handle-agent-signal; la función tiene
   // además el suyo por clave. Leer el despliegue lo hace el SDK al arrancar.
