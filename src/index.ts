@@ -80,6 +80,15 @@ export interface LimiteRuta {
   bucket: string;
   limit: number;
   windowSeconds: number;
+  /**
+   * De quién es el contador. Por defecto, la IP del que llama. `edge-key`
+   * (06 E0, D3): el prefijo de la clave `ndg_` del Worker de NullDec Edge.
+   * Un Worker que llama a `api.nulldec.com` sale con la IP de Cloudflare
+   * (`2a06:98c0:3600::103`, medida el 2026-09-08), así que por IP TODAS las
+   * zonas de todos los clientes compartirían un cubo y una zona con tráfico
+   * dejaría sin señales a las demás.
+   */
+  clave?: "edge-key" | "nodo-key";
 }
 
 // Techo por defecto para lo no listado explícitamente abajo. Antes de esta
@@ -309,7 +318,116 @@ export const RESTRICTED_PATHS: LimiteRuta[] = [
   // empleado. Las hace la consola interna, a mano y de una en una.
   { method: "POST", pattern: "/v1/admin/mfa-resets", bucket: "admin-mfa-resets", limit: 10, windowSeconds: 3600 },
   { method: "POST", pattern: "/v1/admin/staff", bucket: "admin-staff", limit: 20, windowSeconds: 3600 },
+  // «Comprobar ahora» un emplazamiento (A0): cada llamada puede asumir el rol
+  // del cliente en AWS y leer su cuenta. El backend ya exige 5 min entre dos
+  // del mismo señuelo; esto acota cuántos señuelos distintos por minuto.
+  { method: "POST", pattern: "/v1/emplazamientos/:id/verificar", bucket: "emplazamientos-verificar", limit: 10, windowSeconds: 60 },
+  // Aceptar o rechazar lo que propone el bucle de campañas (A2). Un mismo cubo
+  // para los dos verbos: son la misma decisión.
+  { method: "POST", pattern: "/v1/campanas/:id/acciones/:accionId/aceptar", bucket: "campanas-acciones", limit: 30, windowSeconds: 60 },
+  { method: "POST", pattern: "/v1/campanas/:id/acciones/:accionId/rechazar", bucket: "campanas-acciones", limit: 30, windowSeconds: 60 },
+  // Exposición real (AX). Verificar un dominio y proponer un gemelo preguntan
+  // a dos resolutores DNS públicos; un cubo para los dos, que acota cuántos
+  // nombres por minuto se le preguntan al DNS ajeno desde una sesión.
+  { method: "POST", pattern: "/v1/exposicion/dominios/:id/verificar", bucket: "exposicion-dns", limit: 10, windowSeconds: 60 },
+  { method: "GET", pattern: "/v1/exposicion/:id/gemelo", bucket: "exposicion-dns", limit: 10, windowSeconds: 60 },
+  // El sustituto de un secreto filtrado crea un usuario IAM real en la cuenta
+  // trampa (categoría A); comprobar que se plantó lee el repo por la App.
+  { method: "POST", pattern: "/v1/exposicion/secretos/:id/senuelo", bucket: "exposicion-sustituto", limit: 10, windowSeconds: 3600 },
+  { method: "POST", pattern: "/v1/exposicion/secretos/:id/verificar-plantado", bucket: "exposicion-github", limit: 10, windowSeconds: 60 },
+
+  // ── MK PR6: /v1/conectores (08 §4.5) ──
+  // Dar de alta crea una instalación (y, la del webhook, un secreto nuestro);
+  // probar llama a la API del tercero; guardar un secreto escribe en Vault.
+  // Cada uno con su cubo y nacidos con verbo: leer el catálogo no gasta nada.
+  { method: "POST", pattern: "/v1/conectores/:id/instalaciones", bucket: "conectores-alta", limit: 20, windowSeconds: 3600 },
+  { method: "POST", pattern: "/v1/conectores/instalaciones/:iid/probar", bucket: "conectores-probar", limit: 10, windowSeconds: 3600 },
+  { method: "PUT", pattern: "/v1/conectores/instalaciones/:iid/secretos/:nombre", bucket: "conectores-secretos", limit: 20, windowSeconds: 3600 },
+  // Nivel 2 (03 §3.6, §5.1): confirmar una ejecución pendiente aísla un equipo
+  // en Sophos o Defender, y levantar a mano llama otra vez a su API. Un cubo
+  // para las tres formas: son la misma clase de acto sobre un activo real.
+  { method: "POST", pattern: "/v1/rules/executions/:eid/confirmar", bucket: "aislamientos", limit: 30, windowSeconds: 3600 },
+  { method: "DELETE", pattern: "/v1/conectores/sophos/aislamientos/:aid", bucket: "aislamientos", limit: 30, windowSeconds: 3600 },
+  { method: "DELETE", pattern: "/v1/conectores/defender/aislamientos/:aid", bucket: "aislamientos", limit: 30, windowSeconds: 3600 },
+  // Tanda 22: levantar una contención de CrowdStrike o SentinelOne, el mismo cubo.
+  { method: "DELETE", pattern: "/v1/conectores/crowdstrike/contenciones/:cid", bucket: "aislamientos", limit: 30, windowSeconds: 3600 },
+  { method: "DELETE", pattern: "/v1/conectores/sentinelone/contenciones/:cid", bucket: "aislamientos", limit: 30, windowSeconds: 3600 },
+
+  // ── 06 E1: el Worker de NullDec Edge, un cubo por instancia (D3) ──
+  // 600 señales por minuto y zona; la configuración y el latido, mucho menos:
+  // el Worker cachea la primera y manda el segundo cada cinco minutos.
+  { method: "POST", pattern: "/v1/edge/signal", bucket: "edge-signal", limit: 600, windowSeconds: 60, clave: "edge-key" },
+  { method: "GET", pattern: "/v1/edge/config", bucket: "edge-config", limit: 120, windowSeconds: 60, clave: "edge-key" },
+  { method: "POST", pattern: "/v1/edge/latido", bucket: "edge-latido", limit: 30, windowSeconds: 60, clave: "edge-key" },
+  // 06 E6 (2026-10-02): verificar toca la web del cliente dos veces. El backend
+  // ya admite una por instancia y minuto; esto acota lo que una sesión puede
+  // pedir entre todas sus instancias.
+  { method: "POST", pattern: "/v1/edge/instancias/:id/verificar", bucket: "edge-verificar", limit: 30, windowSeconds: 3600 },
+  // 06 E2.3 (2026-10-03): el instalador asistido llama dos veces a Cloudflare con
+  // el token del cliente; pocas por hora bastan para reintentar un fallo.
+  { method: "POST", pattern: "/v1/edge/instancias/:id/instalar", bucket: "edge-instalar", limit: 10, windowSeconds: 3600 },
+
+  // ── 10: NullDec Node ──
+  // El alta, por IP (quien la llama aún no tiene credencial; la función tiene
+  // además su propio 10/60 s). El latido y la credencial, por la `ndo_` del
+  // nodo: varios nodos tras el mismo NAT no comparten cubo. Emitir un token
+  // de alta y retirar un nodo (destruye sus señuelos), acotados por sesión.
+  { method: "POST", pattern: "/v1/nodos/alta", bucket: "nodos-alta", limit: 10, windowSeconds: 60 },
+  { method: "POST", pattern: "/v1/nodos/latido", bucket: "nodos-latido", limit: 20, windowSeconds: 60, clave: "nodo-key" },
+  { method: "POST", pattern: "/v1/nodos/latido/credencial", bucket: "nodos-credencial", limit: 10, windowSeconds: 3600, clave: "nodo-key" },
+  { method: "POST", pattern: "/v1/nodos/altas", bucket: "nodos-altas", limit: 20, windowSeconds: 3600 },
+  { method: "POST", pattern: "/v1/nodos/:id/retirar", bucket: "nodos-retirar", limit: 10, windowSeconds: 3600 },
+
+  // ── 07 §1.7: el servidor MCP ──
+  // El endpoint son 2 segmentos (`/v1/mcp`); decidir una acción, 5. El límite
+  // por concesión (60/min, 1.000/día) va en la función: detrás de un agente de
+  // SOC en la nube la IP es compartida.
+  { method: "*", pattern: "/v1/mcp", bucket: "mcp", limit: 300, windowSeconds: 60 },
+  { method: "*", pattern: "/v1/mcp/acciones/:id/decidir", bucket: "mcp-decidir", limit: 30, windowSeconds: 3600 },
+
+  // ── 03 §4.1: el receptor SSF entrante (RFC 8935) ──
+  // Por IP: lo llama el IdP del cliente (Okta, Entra) desde su red. Un IdP
+  // empuja ráfagas al revocar en bloque; 120/min cubre eso y no más.
+  { method: "POST", pattern: "/v1/ssf/receptor/:id", bucket: "ssf-receptor", limit: 120, windowSeconds: 60 },
+
+  // ── 07 §2.7: el SDK de señuelos en agentes de IA (clave ndx_) ──
+  // Los eventos, el mismo techo que handle-agent-signal; la función tiene
+  // además el suyo por clave. Leer el despliegue lo hace el SDK al arrancar.
+  { method: "POST", pattern: "/v1/senuelos-ia/eventos", bucket: "senuelos-ia", limit: 120, windowSeconds: 60 },
+  { method: "GET", pattern: "/v1/senuelos-ia/despliegue", bucket: "senuelos-ia-despliegue", limit: 30, windowSeconds: 60 },
+
+  // ── 07 §3.5: TAXII 2.1 ──
+  // Un cubo para todo el servidor, por IP: discovery (`/taxii2/`, fuera de
+  // `/v1/` y por eso sin techo por defecto) y cada profundidad del api root,
+  // de `/v1/taxii/nulldec` (3 segmentos) a `.../objects/:oid/versions` (8):
+  // `pathMatchesPattern` exige el mismo número de segmentos.
+  { method: "GET", pattern: "/taxii2", bucket: "taxii", limit: 120, windowSeconds: 60 },
+  { method: "GET", pattern: "/v1/taxii/:a", bucket: "taxii", limit: 120, windowSeconds: 60 },
+  { method: "GET", pattern: "/v1/taxii/:a/:b", bucket: "taxii", limit: 120, windowSeconds: 60 },
+  { method: "GET", pattern: "/v1/taxii/:a/:b/:c", bucket: "taxii", limit: 120, windowSeconds: 60 },
+  { method: "GET", pattern: "/v1/taxii/:a/:b/:c/:d", bucket: "taxii", limit: 120, windowSeconds: 60 },
+  { method: "GET", pattern: "/v1/taxii/:a/:b/:c/:d/:e", bucket: "taxii", limit: 120, windowSeconds: 60 },
+  { method: "GET", pattern: "/v1/taxii/:a/:b/:c/:d/:e/:f", bucket: "taxii", limit: 120, windowSeconds: 60 },
 ];
+
+/**
+ * La clave del contador de una regla. Con `clave: "edge-key"` es el prefijo de
+ * la clave `ndg_` si la cabecera tiene la forma; si no la tiene (falta, otra
+ * familia, basura), se vuelve a la IP: quien no presenta una clave de borde no
+ * gana un cubo propio por inventarse un prefijo distinto en cada petición.
+ */
+export function claveDeCubo(regla: Pick<LimiteRuta, "clave"> | undefined, request: Request, clientIp: string): string {
+  if (regla?.clave === "edge-key") {
+    const m = /^ndg_([0-9a-f]{8})_[0-9a-f]{48}$/.exec(request.headers.get("x-edge-key") ?? "");
+    if (m) return `ndg:${m[1]}`;
+  }
+  // NullDec Node (10 §5.2): el agente del nodo, por el prefijo de su `ndo_`.
+  if (regla?.clave === "nodo-key") {
+    const m = /^ndo_([0-9a-f]{8})_[0-9a-f]{48}$/.exec(request.headers.get("x-api-key") ?? "");
+    if (m) return `ndo:${m[1]}`;
+  }
+  return clientIp;
+}
 
 /**
  * El cubo de los preflight `OPTIONS` (deuda técnica §5.7b).
@@ -420,6 +538,38 @@ export function normalizarParaLimite(pathname: string): string {
 export function reescribirPrefijoV1(pathname: string): string {
   if (!pathname.startsWith("/v1/")) return pathname;
   return "/functions/v1/" + pathname.slice("/v1/".length);
+}
+
+/**
+ * La única ruta fija que conoce el Worker, y no es de la API: SSF 1.0 §6
+ * exige que los metadatos del transmisor cuelguen de
+ * `<issuer>/.well-known/ssf-configuration`, y el issuer de NullDec es
+ * `https://api.nulldec.com`. La función que los sirve es `ssf`.
+ *
+ * Coincidencia EXACTA a propósito: no abre `/.well-known/*` hacia Supabase,
+ * solo este documento. Fuera de `/v1/` no tiene techo por defecto, como el
+ * resto de lo que no es superficie de API; es un JSON público y estático.
+ */
+export const WELL_KNOWN_SSF = "/.well-known/ssf-configuration";
+
+/**
+ * La segunda ruta fija, también impuesta por un estándar: TAXII 2.1 §4.1 pone
+ * el discovery en `/taxii2/` de la raíz del servidor. La sirve la función
+ * `taxii` (07 §3.5). Igual de exacta: con y sin barra final, nada debajo.
+ */
+export const DISCOVERY_TAXII = "/taxii2/";
+
+/**
+ * La tercera, por RFC 9728 §3: la metadata del recurso protegido se inserta
+ * ENTRE el host y la ruta del recurso (`/v1/mcp`). La sirve la función `mcp`.
+ */
+export const WELL_KNOWN_MCP = "/.well-known/oauth-protected-resource/v1/mcp";
+
+export function reescribirWellKnown(pathname: string): string {
+  if (pathname === WELL_KNOWN_SSF) return "/functions/v1/ssf/well-known";
+  if (pathname === WELL_KNOWN_MCP) return "/functions/v1/mcp/.well-known/oauth-protected-resource";
+  if (pathname === DISCOVERY_TAXII || pathname === "/taxii2") return "/functions/v1/taxii/discovery";
+  return pathname;
 }
 
 async function checkAndIncrement(
@@ -602,6 +752,8 @@ export default {
     // propias repeticiones, así que no puede inundar el registro.
     registrarDiagnostico(resolucion, request);
     const clientIp = resolucion.ip ?? "unknown";
+    // El cubo que se aplicó, para anunciarlo en la respuesta (08 §6.2.4).
+    let politica: { limit: number; windowSeconds: number } | null = null;
 
     if (request.method === "OPTIONS") {
       // El preflight tiene su propio cubo — ver `PREFLIGHT_BUCKET`.
@@ -638,7 +790,8 @@ export default {
         const limit = restricted?.limit ?? DEFAULT_LIMIT;
         const windowSeconds = restricted?.windowSeconds ?? DEFAULT_WINDOW_SECONDS;
 
-        const key = `rl:${bucket}:${clientIp}`;
+        const key = `rl:${bucket}:${claveDeCubo(restricted, request, clientIp)}`;
+        politica = { limit, windowSeconds };
         const allowed = await checkAndIncrement(env, key, limit, windowSeconds);
         if (!allowed) {
           return jsonResponse(
@@ -661,7 +814,7 @@ export default {
     // construir la URL de destino, porque es donde ya se tocan `hostname`
     // y `protocol` — una sola parada para las mutaciones de la URL
     // saliente. `search` y `hash` no se tocan, así que sobreviven tal cual.
-    upstream.pathname = reescribirPrefijoV1(upstream.pathname);
+    upstream.pathname = reescribirWellKnown(reescribirPrefijoV1(upstream.pathname));
     // ── Por qué en DOS pasos y no con un init completo ──
     //
     // La forma obvia —`new Request(url, { method, headers, body: request.body })`—
@@ -678,6 +831,21 @@ export default {
     const proxied = new Request(haciaSupabase, {
       headers: cabecerasHaciaSupabase(request, env, clientIp),
     });
-    return fetch(proxied);
+    const respuesta = await fetch(proxied);
+    return politica ? conPoliticaDeLimite(respuesta, politica) : respuesta;
   },
 };
+
+/**
+ * La respuesta con el límite que se le aplicó (08 §6.2.4): un SIEM que sondea
+ * (el `rateLimitConfig` del conector de Sentinel) ajusta su ritmo sin esperar
+ * a un 429. Solo la política, no lo que queda: el contador vive en Postgres y
+ * leerlo costaría otra llamada por petición. `retry-after` sigue saliendo
+ * solo en el 429.
+ */
+export function conPoliticaDeLimite(r: Response, p: { limit: number; windowSeconds: number }): Response {
+  const h = new Headers(r.headers);
+  h.set("x-ratelimit-limit", String(p.limit));
+  h.set("ratelimit-policy", `${p.limit};w=${p.windowSeconds}`);
+  return new Response(r.body, { status: r.status, statusText: r.statusText, headers: h });
+}

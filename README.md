@@ -127,3 +127,22 @@ desplegar.
 
 `wrangler` necesita sesión propia (`npx wrangler login`); no basta con tener
 acceso al panel en el navegador.
+
+## registry.nulldec.com (NullDec Node, 10 §6.3)
+
+`registry/` es un Worker aparte (`nulldec-registry`): un registro de solo lectura delante de GHCR para
+las imágenes privadas del nodo. No toca el Worker de `api.nulldec.com` ni su `wrangler.toml`.
+
+- `docker login registry.nulldec.com -u nodo --password-stdin` con la credencial `ndo_` del nodo. El
+  Worker pregunta al backend (`POST /functions/v1/nodos/registro/token`) qué repos y digests puede
+  servir a ese nodo y firma un token de 5 minutos. La `ndo_` no se guarda ni se registra.
+- Solo sirve manifiestos por digest (nunca por etiqueta) de versiones no retiradas, y las capas por
+  redirección a GHCR, sin pasarlas por el Worker.
+
+Despliegue (tarea del propietario, una vez):
+
+1. DNS: `registry.nulldec.com` como dominio personalizado del Worker (lo declara `registry/wrangler.toml`).
+2. Secretos: `wrangler secret put REGISTRY_JWT_SECRET` (32 bytes aleatorios), `GHCR_USER` y
+   `GHCR_TOKEN` (un token de GitHub con solo `read:packages`), desde `registry/`.
+3. `cd registry && npx wrangler deploy`.
+4. Con el interruptor `nodo_registro` apagado, el backend responde 404 y el Worker niega todo.

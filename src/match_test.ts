@@ -24,10 +24,12 @@ import worker, {
   PREFLIGHT_LIMIT,
   PREFLIGHT_WINDOW_SECONDS,
   RESTRICTED_PATHS,
+  claveDeCubo,
   matchRestrictedPath,
   pathMatchesPattern,
   normalizarParaLimite,
   reescribirPrefijoV1,
+  reescribirWellKnown,
   tieneTechoPorDefecto,
   cabecerasHaciaSupabase,
   type Env,
@@ -109,6 +111,44 @@ describe("matchRestrictedPath", () => {
       "POST /v1/team/invitations/:id/resend",
       "POST /v1/admin/mfa-resets",
       "POST /v1/admin/staff",
+      "POST /v1/emplazamientos/:id/verificar",
+      "POST /v1/campanas/:id/acciones/:accionId/aceptar",
+      "POST /v1/campanas/:id/acciones/:accionId/rechazar",
+      "POST /v1/exposicion/dominios/:id/verificar",
+      "GET /v1/exposicion/:id/gemelo",
+      "POST /v1/exposicion/secretos/:id/senuelo",
+      "POST /v1/exposicion/secretos/:id/verificar-plantado",
+      "POST /v1/conectores/:id/instalaciones",
+      "POST /v1/conectores/instalaciones/:iid/probar",
+      "PUT /v1/conectores/instalaciones/:iid/secretos/:nombre",
+      "POST /v1/rules/executions/:eid/confirmar",
+      "DELETE /v1/conectores/sophos/aislamientos/:aid",
+      "DELETE /v1/conectores/defender/aislamientos/:aid",
+      "DELETE /v1/conectores/crowdstrike/contenciones/:cid",
+      "DELETE /v1/conectores/sentinelone/contenciones/:cid",
+      "POST /v1/edge/signal",
+      "GET /v1/edge/config",
+      "POST /v1/edge/latido",
+      "POST /v1/edge/instancias/:id/verificar",
+      "POST /v1/edge/instancias/:id/instalar",
+      "POST /v1/nodos/alta",
+      "POST /v1/nodos/latido",
+      "POST /v1/nodos/latido/credencial",
+      "POST /v1/nodos/altas",
+      "POST /v1/nodos/:id/retirar",
+      // El receptor SSF (03 §4.1): RFC 8935 solo empuja con POST.
+      "POST /v1/ssf/receptor/:id",
+      // El SDK de señuelos en agentes (07 §2.7): nacieron con su verbo.
+      "POST /v1/senuelos-ia/eventos",
+      "GET /v1/senuelos-ia/despliegue",
+      // TAXII es de solo lectura: nació con GET (07 §3.5).
+      "GET /taxii2",
+      "GET /v1/taxii/:a",
+      "GET /v1/taxii/:a/:b",
+      "GET /v1/taxii/:a/:b/:c",
+      "GET /v1/taxii/:a/:b/:c/:d",
+      "GET /v1/taxii/:a/:b/:c/:d/:e",
+      "GET /v1/taxii/:a/:b/:c/:d/:e/:f",
     ];
     expect(
       RESTRICTED_PATHS.filter((e) => e.method !== "*").map((e) => `${e.method} ${e.pattern}`),
@@ -152,7 +192,7 @@ describe("matchRestrictedPath", () => {
  * propósito y se deja escrito el porqué.
  */
 describe("instantánea de los cubos vivos", () => {
-  it("las veinticuatro entradas —veinte cubos— son exactamente estas", () => {
+  it("las treinta y siete entradas (treinta y un cubos) son exactamente estas", () => {
     const instantanea = RESTRICTED_PATHS.map(({ bucket, limit, windowSeconds }) => ({
       bucket,
       limit,
@@ -223,6 +263,50 @@ describe("instantánea de los cubos vivos", () => {
       { bucket: "team-invitations", limit: 60, windowSeconds: 3600 },
       { bucket: "admin-mfa-resets", limit: 10, windowSeconds: 3600 },
       { bucket: "admin-staff", limit: 20, windowSeconds: 3600 },
+      // 2026-10-01, A0: «comprobar ahora» un emplazamiento.
+      { bucket: "emplazamientos-verificar", limit: 10, windowSeconds: 60 },
+      // 2026-10-01, A2: el visto bueno a las acciones del bucle (dos formas, un cubo).
+      { bucket: "campanas-acciones", limit: 30, windowSeconds: 60 },
+      { bucket: "campanas-acciones", limit: 30, windowSeconds: 60 },
+      // 2026-10-01, AX: DNS ajeno (dos formas, un cubo), el sustituto IAM y la lectura del repo.
+      { bucket: "exposicion-dns", limit: 10, windowSeconds: 60 },
+      { bucket: "exposicion-dns", limit: 10, windowSeconds: 60 },
+      { bucket: "exposicion-sustituto", limit: 10, windowSeconds: 3600 },
+      { bucket: "exposicion-github", limit: 10, windowSeconds: 60 },
+      // MK PR6 (2026-10-02): alta, prueba y secretos de /v1/conectores.
+      { bucket: "conectores-alta", limit: 20, windowSeconds: 3600 },
+      { bucket: "conectores-probar", limit: 10, windowSeconds: 3600 },
+      { bucket: "conectores-secretos", limit: 20, windowSeconds: 3600 },
+      // 2026-10-02, nivel 2: confirmar un aislamiento y levantarlo a mano (Sophos y Defender).
+      { bucket: "aislamientos", limit: 30, windowSeconds: 3600 },
+      { bucket: "aislamientos", limit: 30, windowSeconds: 3600 },
+      { bucket: "aislamientos", limit: 30, windowSeconds: 3600 },
+      { bucket: "aislamientos", limit: 30, windowSeconds: 3600 },
+      { bucket: "aislamientos", limit: 30, windowSeconds: 3600 },
+      // 06 E1 (2026-10-02): el Worker de NullDec Edge, contado por su clave y no por IP.
+      { bucket: "edge-signal", limit: 600, windowSeconds: 60 },
+      { bucket: "edge-config", limit: 120, windowSeconds: 60 },
+      { bucket: "edge-latido", limit: 30, windowSeconds: 60 },
+      { bucket: "edge-verificar", limit: 30, windowSeconds: 3600 },
+      { bucket: "edge-instalar", limit: 10, windowSeconds: 3600 },
+      // 10 (2026-10-02): NullDec Node, el alta por IP y el agente por su ndo_.
+      { bucket: "nodos-alta", limit: 10, windowSeconds: 60 },
+      { bucket: "nodos-latido", limit: 20, windowSeconds: 60 },
+      { bucket: "nodos-credencial", limit: 10, windowSeconds: 3600 },
+      { bucket: "nodos-altas", limit: 20, windowSeconds: 3600 },
+      { bucket: "nodos-retirar", limit: 10, windowSeconds: 3600 },
+      { bucket: "mcp", limit: 300, windowSeconds: 60 },
+      { bucket: "mcp-decidir", limit: 30, windowSeconds: 3600 },
+      { bucket: "ssf-receptor", limit: 120, windowSeconds: 60 },
+      { bucket: "senuelos-ia", limit: 120, windowSeconds: 60 },
+      { bucket: "senuelos-ia-despliegue", limit: 30, windowSeconds: 60 },
+      { bucket: "taxii", limit: 120, windowSeconds: 60 },
+      { bucket: "taxii", limit: 120, windowSeconds: 60 },
+      { bucket: "taxii", limit: 120, windowSeconds: 60 },
+      { bucket: "taxii", limit: 120, windowSeconds: 60 },
+      { bucket: "taxii", limit: 120, windowSeconds: 60 },
+      { bucket: "taxii", limit: 120, windowSeconds: 60 },
+      { bucket: "taxii", limit: 120, windowSeconds: 60 },
     ]);
   });
 
@@ -565,6 +649,26 @@ describe("comportamiento de checkAndIncrement ante fallo y ante límite alcanzad
     expect(reenviada, "la petición debe llegar a upstream pese al fallo del límite").toBeDefined();
   });
 
+  it("una respuesta que pasó por un cubo anuncia su política (x-ratelimit-limit, ratelimit-policy)", async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      if (urlDeEntrada(input).includes("/rest/v1/rpc/rate_limit_check_borde")) {
+        return new Response("true", { status: 200, headers: { "content-type": "application/json" } });
+      }
+      return new Response("ok-upstream", { status: 200, headers: { "x-de-arriba": "1" } });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const res = await worker.fetch(
+      new Request("https://api.nulldec.com/v1/signals?schema=2", { headers: { "cf-connecting-ip": "203.0.113.9" } }),
+      env,
+    );
+    expect(res.status).toBe(200);
+    expect(res.headers.get("x-ratelimit-limit")).toBe("600");
+    expect(res.headers.get("ratelimit-policy")).toBe("600;w=60");
+    expect(res.headers.get("x-de-arriba")).toBe("1");
+    expect(await res.text()).toBe("ok-upstream");
+  });
+
   it("si la RPC lanza (fallo de red), la petición también se deja pasar", async () => {
     callarError();
     const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
@@ -780,6 +884,58 @@ describe("reescribirPrefijoV1", () => {
   });
 });
 
+describe("reescribirWellKnown", () => {
+  it("/.well-known/ssf-configuration -> /functions/v1/ssf/well-known", () => {
+    expect(reescribirWellKnown("/.well-known/ssf-configuration")).toBe("/functions/v1/ssf/well-known");
+  });
+
+  it("coincidencia exacta: ni otros documentos de /.well-known ni variantes con barra", () => {
+    expect(reescribirWellKnown("/.well-known/openid-configuration")).toBe("/.well-known/openid-configuration");
+    expect(reescribirWellKnown("/.well-known/ssf-configuration/")).toBe("/.well-known/ssf-configuration/");
+    expect(reescribirWellKnown("/.well-known/ssf-configuration/x")).toBe("/.well-known/ssf-configuration/x");
+  });
+});
+
+describe("MCP (07 §1.7)", () => {
+  it("la metadata RFC 9728 va a la función mcp; nada más de /.well-known", () => {
+    expect(reescribirWellKnown("/.well-known/oauth-protected-resource/v1/mcp")).toBe("/functions/v1/mcp/.well-known/oauth-protected-resource");
+    expect(reescribirWellKnown("/.well-known/oauth-protected-resource")).toBe("/.well-known/oauth-protected-resource");
+  });
+
+  it("el endpoint y decidir tienen su cubo; las demás rutas de consola, el techo por defecto", () => {
+    expect(matchRestrictedPath("POST", "/v1/mcp")?.bucket).toBe("mcp");
+    expect(matchRestrictedPath("POST", "/v1/mcp/acciones/00000000-0000-4000-8000-000000000001/decidir")?.bucket).toBe("mcp-decidir");
+    expect(matchRestrictedPath("POST", "/v1/ssf/receptor/00000000-0000-4000-8000-000000000001")?.bucket).toBe("ssf-receptor");
+    expect(matchRestrictedPath("GET", "/v1/mcp/concesiones")).toBeUndefined();
+  });
+});
+
+describe("TAXII 2.1 (07 §3.5)", () => {
+  it("/taxii2/ y /taxii2 van al discovery de la función taxii; nada debajo", () => {
+    expect(reescribirWellKnown("/taxii2/")).toBe("/functions/v1/taxii/discovery");
+    expect(reescribirWellKnown("/taxii2")).toBe("/functions/v1/taxii/discovery");
+    expect(reescribirWellKnown("/taxii2/otra")).toBe("/taxii2/otra");
+  });
+
+  it("todas las profundidades del api root, y el discovery, caen en el cubo taxii", () => {
+    const col = "2f6c1e44-5b0a-4c8e-9a51-6d3f0b7a1c01";
+    for (const ruta of [
+      "/taxii2/",
+      "/v1/taxii/nulldec/",
+      "/v1/taxii/nulldec/collections/",
+      `/v1/taxii/nulldec/collections/${col}/`,
+      `/v1/taxii/nulldec/collections/${col}/objects/`,
+      `/v1/taxii/nulldec/collections/${col}/manifest/`,
+      `/v1/taxii/nulldec/collections/${col}/objects/indicator--x/`,
+      `/v1/taxii/nulldec/collections/${col}/objects/indicator--x/versions/`,
+    ]) {
+      const r = matchRestrictedPath("GET", ruta);
+      expect(r?.bucket, ruta).toBe("taxii");
+      expect(r?.limit).toBe(120);
+    }
+  });
+});
+
 describe("la reescritura se aplica al reenviar (integración con worker.fetch)", () => {
   const env: Env = { SUPABASE_HOST: "example.supabase.co", SUPABASE_ANON_KEY: "anon-key" };
   let fetchMock: ReturnType<typeof vi.fn>;
@@ -819,6 +975,17 @@ describe("la reescritura se aplica al reenviar (integración con worker.fetch)",
     expect(proxiedCall).toBeDefined();
     const [proxiedInput] = proxiedCall as [RequestInfo];
     expect(urlDe(proxiedInput)).toBe("https://example.supabase.co/functions/v1/verify-turnstile?token=xyz");
+  });
+
+  it("/.well-known/ssf-configuration se reenvía a la función ssf, sin pasar por el límite", async () => {
+    const request = new Request("https://api.nulldec.com/.well-known/ssf-configuration", {
+      headers: { "cf-connecting-ip": "203.0.113.9" },
+    });
+
+    await worker.fetch(request, env);
+
+    const urls = fetchMock.mock.calls.map(([input]) => urlDe(input));
+    expect(urls).toEqual(["https://example.supabase.co/functions/v1/ssf/well-known"]);
   });
 
   it("/functions/v1/verify-turnstile se reenvía sin cambios", async () => {
@@ -1108,5 +1275,54 @@ describe("el límite del borde va por la función que exige secreto", () => {
       expect(JSON.parse(llamadas[0].body as string).p_secret).toBe("");
       expect(res.status).toBe(429);
     } finally { vi.unstubAllGlobals(); }
+  });
+});
+
+describe("06 E1, D3: el Worker de borde cuenta por su clave, no por la IP de Cloudflare", () => {
+  const CLAVE_A = "ndg_aaaaaaaa_" + "0".repeat(48);
+  const CLAVE_B = "ndg_bbbbbbbb_" + "0".repeat(48);
+  const con = (clave?: string) => new Request("https://api.nulldec.com/v1/edge/signal", {
+    method: "POST", headers: clave ? { "x-edge-key": clave } : {},
+  });
+  const regla = matchRestrictedPath("POST", "/v1/edge/signal");
+
+  it("dos zonas desde la misma IP de Cloudflare no comparten cubo", () => {
+    const ip = "2a06:98c0:3600::103";
+    expect(claveDeCubo(regla, con(CLAVE_A), ip)).toBe("ndg:aaaaaaaa");
+    expect(claveDeCubo(regla, con(CLAVE_B), ip)).toBe("ndg:bbbbbbbb");
+  });
+
+  it("sin clave de borde bien formada, cuenta por IP; y el resto de reglas, también", () => {
+    expect(claveDeCubo(regla, con(), "203.0.113.7")).toBe("203.0.113.7");
+    expect(claveDeCubo(regla, con("nde_aaaaaaaa_" + "0".repeat(48)), "203.0.113.7")).toBe("203.0.113.7");
+    expect(claveDeCubo(regla, con("ndg_aaaaaaaa_corta"), "203.0.113.7")).toBe("203.0.113.7");
+    expect(claveDeCubo(matchRestrictedPath("POST", "/v1/contact-sales"), con(CLAVE_A), "203.0.113.7")).toBe("203.0.113.7");
+    expect(claveDeCubo(undefined, con(CLAVE_A), "203.0.113.7")).toBe("203.0.113.7");
+  });
+});
+
+describe("nivel 2: confirmar y levantar un aislamiento tienen cubo", () => {
+  it("las tres formas caen en «aislamientos», y leer el resumen no gasta", () => {
+    const id = "1f8c9e0a-1111-2222-3333-444455556666";
+    expect(matchRestrictedPath("POST", `/v1/rules/executions/${id}/confirmar`)?.bucket).toBe("aislamientos");
+    expect(matchRestrictedPath("DELETE", `/v1/conectores/defender/aislamientos/${id}`)?.bucket).toBe("aislamientos");
+    expect(matchRestrictedPath("DELETE", `/v1/conectores/sophos/aislamientos/${id}`)?.bucket).toBe("aislamientos");
+    expect(matchRestrictedPath("DELETE", `/v1/conectores/crowdstrike/contenciones/${id}`)?.bucket).toBe("aislamientos");
+    expect(matchRestrictedPath("DELETE", `/v1/conectores/sentinelone/contenciones/${id}`)?.bucket).toBe("aislamientos");
+    expect(matchRestrictedPath("GET", "/v1/conectores/defender/resumen")).toBeUndefined();
+  });
+});
+
+describe("NullDec Node: el agente cuenta por su ndo_, no por la IP", () => {
+  const con = (k?: string) => new Request("https://api.nulldec.com/functions/v1/nodos/latido", { method: "POST", headers: k ? { "x-api-key": k } : {} });
+  it("latido y credencial por prefijo; sin ndo_ válida, por IP; el alta siempre por IP", () => {
+    const latido = matchRestrictedPath("POST", "/functions/v1/nodos/latido");
+    expect(latido?.bucket).toBe("nodos-latido");
+    expect(claveDeCubo(latido, con("ndo_aaaaaaaa_" + "0".repeat(48)), "203.0.113.7")).toBe("ndo:aaaaaaaa");
+    expect(claveDeCubo(latido, con("ndn_aaaaaaaa_" + "0".repeat(48)), "203.0.113.7")).toBe("203.0.113.7");
+    expect(claveDeCubo(latido, con(), "203.0.113.7")).toBe("203.0.113.7");
+    expect(matchRestrictedPath("POST", "/v1/nodos/latido/credencial")?.bucket).toBe("nodos-credencial");
+    expect(claveDeCubo(matchRestrictedPath("POST", "/v1/nodos/alta"), con("ndo_aaaaaaaa_" + "0".repeat(48)), "203.0.113.7")).toBe("203.0.113.7");
+    expect(matchRestrictedPath("GET", "/v1/nodos")).toBeUndefined();
   });
 });
