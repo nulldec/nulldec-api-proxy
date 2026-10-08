@@ -86,6 +86,16 @@ publicar un Worker que autenticaría con `undefined`.
   tráfico, solo en los `console.error` — por eso la observabilidad está
   declarada como encendida en `wrangler.toml`.
 
+- Toda respuesta que genera el propio Worker lleva las mismas cabeceras CORS que
+  las de las Edge Functions (`CORS_HEADERS`) y el cuerpo `{error, code}` de la
+  API: 429 `rate_limited`, 504 `upstream_timeout` (Supabase sin cabeceras en
+  `UPSTREAM_TIMEOUT_MS`, 120 s), 502 `upstream_unavailable` (el `fetch` lanza) y
+  500 `internal_error` (cualquier otra excepción). Sin CORS, la consola ve
+  cualquiera de ellas como un fallo de red opaco.
+- Los handshakes WebSocket (`Upgrade: websocket`, Realtime en
+  `/realtime/v1/websocket`) se reenvían igual y se devuelve la respuesta de
+  Supabase sin tocar, sin plazo y sin envoltorio JSON.
+
 **Las peticiones `OPTIONS` no pasan por ningún límite** (ni el específico ni el
 por defecto). Es preexistente y de riesgo bajo —cada Edge Function responde al
 preflight en su primera línea, sin tocar la base de datos— pero desde que existe

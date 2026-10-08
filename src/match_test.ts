@@ -711,7 +711,7 @@ describe("comportamiento de checkAndIncrement ante fallo y ante límite alcanzad
     expect(res.status).toBe(429);
     // 3600 s: la ventana del cubo contact-sales, no la del techo por defecto.
     expect(res.headers.get("retry-after")).toBe("3600");
-    expect(res.headers.get("access-control-expose-headers")).toBe("retry-after");
+    expect(res.headers.get("access-control-expose-headers")).toContain("retry-after");
     expect((await res.json()).error).toContain("límite");
     // Y, cortada, NO se reenvía a upstream.
     const reenviada = fetchMock.mock.calls.find(
