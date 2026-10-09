@@ -23,6 +23,12 @@ export interface Env {
   SUPABASE_HOST: string;
   SUPABASE_ANON_KEY: string;
   /**
+   * Región en la que se ejecutan las Edge Functions (`x-region`). Ver
+   * `regionDeFunciones`. Vacío = la de siempre (eu-central-1); `auto` = que
+   * elija Supabase, para salir del paso si esa región se cae.
+   */
+  FUNCTIONS_REGION?: string;
+  /**
    * Secreto compartido con las Edge Functions, que autoriza la cabecera
    * `x-nd-real-ip` que este Worker inyecta. Ver `cabecerasHaciaSupabase`.
    *
@@ -626,27 +632,74 @@ async function checkAndIncrement(
   }
 }
 
+/**
+ * Las cabeceras CORS de toda respuesta que FABRICA este Worker (429, 502, 504,
+ * 500). Son copia de `corsHeaders` de `_shared/http.ts` del backend, que es lo
+ * que llevan las respuestas reenviadas: si difieren, la consola lee una
+ * cabecera en un 200 y no en un 504 del mismo endpoint.
+ *
+ * Sin ellas, cualquier respuesta del Worker llega a la consola como un fallo
+ * de CORS opaco —el navegador la bloquea antes de que el código vea el
+ * estado— y «límite excedido» o «Supabase no contesta» se leen igual que «no
+ * hay red» (incidente del 2026-10-08 en `/v1/rules/flujos`).
+ *
+ * `retry-after` va expuesta porque sin ella la consola sabe que ha chocado
+ * con un límite pero no cuánto esperar.
+ */
+export const CORS_HEADERS: Record<string, string> = {
+  "access-control-allow-origin": "*",
+  "access-control-allow-headers":
+    "authorization, x-client-info, apikey, content-type, x-api-key, x-admin-secret, if-none-match",
+  "access-control-allow-methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
+  "access-control-expose-headers": "etag, allow, retry-after",
+};
+
 function jsonResponse(body: unknown, status: number, extraHeaders: Record<string, string> = {}): Response {
   return new Response(JSON.stringify(body), {
     status,
-    headers: {
-      "content-type": "application/json",
-      // Sin esto, cuando el límite se alcanza desde la consola (varias
-      // de las rutas restringidas se llaman desde el navegador), el
-      // navegador bloquea la respuesta por CORS antes de que el código
-      // de la consola pueda mostrar el mensaje real — se vería como un
-      // fallo de red genérico, no como "límite excedido".
-      "access-control-allow-origin": "*",
-      "access-control-allow-headers": "authorization, content-type, apikey, x-client-info",
-      "access-control-allow-methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
-      // Sin exponer esta cabecera, la consola recibe el 429 pero no puede
-      // leer `retry-after` (el CORS por defecto solo deja leer un puñado
-      // de cabeceras "seguras", y esta no es una de ellas) — solo puede
-      // decir "límite excedido" a secas, sin poder decir cuánto esperar.
-      "access-control-expose-headers": "retry-after",
-      ...extraHeaders,
-    },
+    headers: { "content-type": "application/json", ...CORS_HEADERS, ...extraHeaders },
   });
+}
+
+/**
+ * El 429 del borde, con la forma de `tooManyRequests` del backend: `code` y
+ * `detalle.retry_after` son lo que la consola traduce («inténtalo en N
+ * segundos»); sin `code` solo podía caer al genérico por estado.
+ */
+function limiteExcedido(windowSeconds: number): Response {
+  return jsonResponse(
+    {
+      error: "límite de peticiones excedido para esta operación",
+      code: "rate_limited",
+      detalle: { retry_after: windowSeconds },
+    },
+    429,
+    { "retry-after": String(windowSeconds) },
+  );
+}
+
+/**
+ * Cuánto espera el Worker a que Supabase empiece a contestar (las cabeceras,
+ * no el cuerpo entero) antes de cortar con un 504 propio.
+ *
+ * Hasta el 2026-10-08 no había plazo ninguno: un `fetch` colgado esperaba lo
+ * que aguantara el que fallara antes por el camino, y ninguno de esos
+ * cortes lleva CORS. 120 s queda entre dos cotas:
+ *
+ *   - por encima de los 90 s de `AI_TIMEOUT_MS` de la consola: el Worker no
+ *     corta nada que la consola aún esté dispuesta a esperar;
+ *   - por debajo de los 150 s de «request idle timeout» de las Edge Functions,
+ *     cuyo 504 lo genera Supabase sin nuestras cabeceras CORS.
+ */
+export const UPSTREAM_TIMEOUT_MS = 120_000;
+
+/**
+ * El handshake de WebSocket (Realtime: `/realtime/v1/websocket`). Se reenvía
+ * igual que el resto pero se devuelve TAL CUAL: la `Response` de Supabase
+ * lleva el `webSocket` y cualquier copia (`new Response(r.body, …)`) lo pierde.
+ */
+export function esUpgradeWebSocket(request: Request): boolean {
+  return request.headers.get("upgrade")?.toLowerCase() === "websocket";
 }
 
 /**
@@ -731,7 +784,31 @@ export function cabecerasHaciaSupabase(request: Request, env: Env, clientIp: str
   return cabeceras;
 }
 
-export default {
+/**
+ * La región en la que corren las Edge Functions.
+ *
+ * Sin indicarla, Supabase ejecuta la función en la región más cercana a quien
+ * llama: para la consola, us-east-1. La base de datos está en eu-central-1, y
+ * cada petición hace varios viajes a ella (usuario, membresía, estado de
+ * sesión, pantallas, la consulta): medido el 2026-10-08, ~1,1 s de mediana en
+ * us-east-1 para consultas de 10 ms. Se fija a la región de la base de datos.
+ *
+ * Solo para `/functions/v1/*`; REST, Auth y Realtime no lo admiten ni lo
+ * necesitan. Con una región fija, Supabase NO redirige si esa región cae: por
+ * eso se puede cambiar o quitar (`auto`) con una variable, sin desplegar
+ * código. Lo que mande quien llama se ignora: la región la decide el Worker.
+ */
+export const REGION_POR_DEFECTO = "eu-central-1";
+export function regionDeFunciones(cabeceras: Headers, rutaHaciaSupabase: string, env: Pick<Env, "FUNCTIONS_REGION">): void {
+  cabeceras.delete("x-region");
+  if (!rutaHaciaSupabase.startsWith("/functions/v1/")) return;
+  const region = (env.FUNCTIONS_REGION ?? "").trim() || REGION_POR_DEFECTO;
+  if (region === "auto") return;
+  if (!/^[a-z]{2}-[a-z]+-\d$/.test(region)) return;
+  cabeceras.set("x-region", region);
+}
+
+const manejador = {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
     // La IP que decide el cubo del límite de tasa. Con el relé de Hetzner
@@ -764,13 +841,7 @@ export default {
           PREFLIGHT_LIMIT,
           PREFLIGHT_WINDOW_SECONDS,
         );
-        if (!allowed) {
-          return jsonResponse(
-            { error: "límite de peticiones excedido para esta operación" },
-            429,
-            { "retry-after": String(PREFLIGHT_WINDOW_SECONDS) },
-          );
-        }
+        if (!allowed) return limiteExcedido(PREFLIGHT_WINDOW_SECONDS);
       }
     } else {
       // Barras colapsadas SOLO para decidir — ver `normalizarParaLimite`. La
@@ -793,13 +864,7 @@ export default {
         const key = `rl:${bucket}:${claveDeCubo(restricted, request, clientIp)}`;
         politica = { limit, windowSeconds };
         const allowed = await checkAndIncrement(env, key, limit, windowSeconds);
-        if (!allowed) {
-          return jsonResponse(
-            { error: "límite de peticiones excedido para esta operación" },
-            429,
-            { "retry-after": String(windowSeconds) },
-          );
-        }
+        if (!allowed) return limiteExcedido(windowSeconds);
       }
     }
 
@@ -828,11 +893,57 @@ export default {
     // petición hacia el destino nuevo (método, cuerpo y todo lo demás), y el
     // segundo solo sustituye las cabeceras.
     const haciaSupabase = new Request(upstream.toString(), request);
-    const proxied = new Request(haciaSupabase, {
-      headers: cabecerasHaciaSupabase(request, env, clientIp),
-    });
-    const respuesta = await fetch(proxied);
+    const cabeceras = cabecerasHaciaSupabase(request, env, clientIp);
+    regionDeFunciones(cabeceras, upstream.pathname, env);
+
+    // Realtime: misma URL, mismas cabeceras (el `apikey` va en la query y
+    // sobrevive), pero sin plazo ni copia de la respuesta — ver
+    // `esUpgradeWebSocket`. El plazo de abajo no aplica: una vez abierto, el
+    // socket vive lo que quiera, y abortarlo lo cerraría.
+    if (esUpgradeWebSocket(request)) {
+      return fetch(new Request(haciaSupabase, { headers: cabeceras }));
+    }
+
+    const plazo = new AbortController();
+    const proxied = new Request(haciaSupabase, { headers: cabeceras, signal: plazo.signal });
+    const temporizador = setTimeout(() => plazo.abort(), UPSTREAM_TIMEOUT_MS);
+    let respuesta: Response;
+    try {
+      respuesta = await fetch(proxied);
+    } catch (err) {
+      if (plazo.signal.aborted) {
+        console.error(`Supabase sin respuesta en ${UPSTREAM_TIMEOUT_MS} ms:`, request.method, url.pathname);
+        return jsonResponse(
+          {
+            error: "el servicio no respondió a tiempo",
+            code: "upstream_timeout",
+            detalle: { timeout_s: UPSTREAM_TIMEOUT_MS / 1000 },
+          },
+          504,
+        );
+      }
+      console.error("el reenvío a Supabase lanzó:", request.method, url.pathname, err);
+      return jsonResponse({ error: "no se pudo contactar con el servicio", code: "upstream_unavailable" }, 502);
+    } finally {
+      // Solo hasta las cabeceras: el cuerpo (p.ej. un flujo SSE) no tiene plazo.
+      clearTimeout(temporizador);
+    }
     return politica ? conPoliticaDeLimite(respuesta, politica) : respuesta;
+  },
+};
+
+export default {
+  async fetch(request: Request, env: Env): Promise<Response> {
+    try {
+      return await manejador.fetch(request, env);
+    } catch (err) {
+      // Cualquier excepción que se escape acababa en la página 1101 de
+      // Cloudflare: HTML y sin CORS, o sea, un «fallo de red» en la consola.
+      console.error("excepción no controlada en el Worker:", err);
+      // A un handshake no le sirve ni JSON ni CORS (WebSocket no pasa por CORS).
+      if (esUpgradeWebSocket(request)) return new Response(null, { status: 502 });
+      return jsonResponse({ error: "error interno", code: "internal_error" }, 500);
+    }
   },
 };
 
