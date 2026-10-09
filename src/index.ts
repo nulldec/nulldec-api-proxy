@@ -23,6 +23,12 @@ export interface Env {
   SUPABASE_HOST: string;
   SUPABASE_ANON_KEY: string;
   /**
+   * Región en la que se ejecutan las Edge Functions (`x-region`). Ver
+   * `regionDeFunciones`. Vacío = la de siempre (eu-central-1); `auto` = que
+   * elija Supabase, para salir del paso si esa región se cae.
+   */
+  FUNCTIONS_REGION?: string;
+  /**
    * Secreto compartido con las Edge Functions, que autoriza la cabecera
    * `x-nd-real-ip` que este Worker inyecta. Ver `cabecerasHaciaSupabase`.
    *
@@ -778,6 +784,30 @@ export function cabecerasHaciaSupabase(request: Request, env: Env, clientIp: str
   return cabeceras;
 }
 
+/**
+ * La región en la que corren las Edge Functions.
+ *
+ * Sin indicarla, Supabase ejecuta la función en la región más cercana a quien
+ * llama: para la consola, us-east-1. La base de datos está en eu-central-1, y
+ * cada petición hace varios viajes a ella (usuario, membresía, estado de
+ * sesión, pantallas, la consulta): medido el 2026-10-08, ~1,1 s de mediana en
+ * us-east-1 para consultas de 10 ms. Se fija a la región de la base de datos.
+ *
+ * Solo para `/functions/v1/*`; REST, Auth y Realtime no lo admiten ni lo
+ * necesitan. Con una región fija, Supabase NO redirige si esa región cae: por
+ * eso se puede cambiar o quitar (`auto`) con una variable, sin desplegar
+ * código. Lo que mande quien llama se ignora: la región la decide el Worker.
+ */
+export const REGION_POR_DEFECTO = "eu-central-1";
+export function regionDeFunciones(cabeceras: Headers, rutaHaciaSupabase: string, env: Pick<Env, "FUNCTIONS_REGION">): void {
+  cabeceras.delete("x-region");
+  if (!rutaHaciaSupabase.startsWith("/functions/v1/")) return;
+  const region = (env.FUNCTIONS_REGION ?? "").trim() || REGION_POR_DEFECTO;
+  if (region === "auto") return;
+  if (!/^[a-z]{2}-[a-z]+-\d$/.test(region)) return;
+  cabeceras.set("x-region", region);
+}
+
 const manejador = {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
@@ -864,6 +894,7 @@ const manejador = {
     // segundo solo sustituye las cabeceras.
     const haciaSupabase = new Request(upstream.toString(), request);
     const cabeceras = cabecerasHaciaSupabase(request, env, clientIp);
+    regionDeFunciones(cabeceras, upstream.pathname, env);
 
     // Realtime: misma URL, mismas cabeceras (el `apikey` va en la query y
     // sobrevive), pero sin plazo ni copia de la respuesta — ver

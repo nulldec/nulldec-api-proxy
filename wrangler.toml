@@ -70,6 +70,12 @@ workers_dev = false
 # API caída.
 SUPABASE_HOST = "dtarsxovqdtjtdxzdzzy.supabase.co"
 
+# Región de las Edge Functions (cabecera `x-region`), la de la base de datos.
+# `auto` deja que Supabase elija la más cercana a quien llama: es la salida si
+# eu-central-1 se cae, porque con una región fija no redirige. Ver
+# `regionDeFunciones` en src/index.ts.
+FUNCTIONS_REGION = "eu-central-1"
+
 # SUPABASE_ANON_KEY NO se declara aquí, y es deliberado: es un secreto
 # (secret_text). Wrangler conserva los secretos existentes en cada
 # despliegue, así que no hace falta repetirlo — y ponerlo en este fichero lo
